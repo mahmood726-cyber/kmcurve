@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Test outputs
+batch_results/
+batch_results_*/
+test_single/
+*_test/
+
+# Data files
+test_pdfs/
+*.pdf
+*.png
+*.jpg
+*.jpeg
+
+# Results
+*.csv
+*.json
+*.rds
+nul
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
