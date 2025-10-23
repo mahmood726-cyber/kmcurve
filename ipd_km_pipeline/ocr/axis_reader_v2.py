@@ -211,18 +211,38 @@ def multi_engine_ocr(img: np.ndarray) -> Tuple[str, float, str]:
     """
     CRITICAL IMPROVEMENT #3: Try multiple OCR engines and return best result.
 
-    Engines tried (in order):
-    1. Tesseract (fast, good for English)
-    2. EasyOCR (slower, but better for challenging text)
-    3. Tesseract with different PSM modes
+    Engines tried (in order of expected accuracy):
+    1. TrOCR (neural network, best for small fonts) - NEW!
+    2. Tesseract (fast, good for English)
+    3. EasyOCR (slower, but better for challenging text)
+    4. Tesseract with different PSM modes
 
     Returns:
         (text, confidence, engine_name)
     """
     results = []
 
-    # Convert numpy array to PIL Image for Tesseract
+    # Convert numpy array to PIL Image
     pil_img = Image.fromarray(img)
+
+    # Try 0: TrOCR (neural network OCR - highest accuracy for medical figures)
+    try:
+        from ocr.axis_reader_trocr import create_trocr_reader
+
+        # Use global TrOCR reader to avoid reloading model each time
+        global _trocr_reader
+        if '_trocr_reader' not in globals():
+            _trocr_reader = create_trocr_reader(model_size="large")  # Use large model for >95% accuracy
+
+        if _trocr_reader is not None:
+            text, conf = _trocr_reader.extract_text_from_image(img)
+            results.append((text, conf, 'trocr_large'))
+    except ImportError:
+        # TrOCR not installed, skip
+        pass
+    except Exception as e:
+        # TrOCR failed, continue with fallbacks
+        pass
 
     # Try 1: Tesseract with PSM 6 (uniform block)
     try:

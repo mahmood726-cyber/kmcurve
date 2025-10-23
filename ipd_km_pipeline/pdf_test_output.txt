@@ -1,0 +1,39 @@
+Testing PDF text extraction: test_pdfs\medrxiv\medrxiv_19004184.pdf
+================================================================================
+
+Page 13:
+--------------------------------------------------------------------------------
+  Bottom region text preview: 13 
+ 
+...
+  X-axis numbers found: [13.0]
+  Left region text preview:  
+ 
+Age-adjust
+germline
+mutation ra
+ 
+ 
+Both sexes 
+Continuous 
+25th-50th perce
+>50th-75th perc
+> 75th percenti
+Trend test 
+ Males 
+Continuous 
+25th-50th perce
+>50th-75th perc
+> 75th percenti
+Trend te...
+  Y-axis numbers found: [1.0]
+  [FAILURE] X-axis=FAILED, Y-axis=FAILED
+  >> X calibration: Fallback to (0, 60)
+  >> Y calibration: Fallback to (0, 1)
+
+Page 15:
+--------------------------------------------------------------------------------
+  Bottom region text preview: 15 
+ 
+...
+  X-axis numbers found: [15.0]

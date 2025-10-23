@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" C:/temp/debug_target_region.R)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" C:/temp/investigate_layout.R)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" C:/temp/find_curve_paths.R)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" C:/temp/find_all_vertical_lines.R)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" C:/temp/find_horizontal_axes.R)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" C:/temp/define_panels_from_curves.R)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" C:/temp/find_x_axis_labels.R)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" km_pdf_vector_extract_ultra.R --input_dir=\"C:/temp/km_test\" --output_dir=\"C:/temp/km_output_test\" --pages=7,8)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" C:/temp/test_xaxis_label_extent.R)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" C:/temp/analyze_numeric_texts.R)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" C:/temp/debug_smart_xaxis.R)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" C:/temp/debug_axis_positions.R)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" C:/temp/trace_detection_pipeline.R)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" \"C:/Users/user/OneDrive - NHS/Documents/KMcurve/km_pdf_vector_extract_ultra.R\" --input_dir=\"C:/temp/km_test\" --output_dir=\"C:/temp/km_output_final\" --pages=7,8)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" C:/temp/trace_calibration_phase.R)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" C:/temp/debug_build_panels.R)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" C:/temp/trace_full_pipeline.R)",
+      "Bash(\"/c/Program Files/R/R-4.5.1/bin/Rscript.exe\" C:/temp/check_svg_elements.R)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
