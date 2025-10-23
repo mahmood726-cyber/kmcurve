@@ -53,13 +53,16 @@ def detect_axis_lines(panel_img: np.ndarray) -> Tuple[Optional[np.ndarray], Opti
     edges = cv2.Canny(gray, 50, 150, apertureSize=3)
 
     # Detect lines using Hough transform
+    # FIXED: Relaxed parameters to detect axis lines even with tick marks/gaps
+    # Old: threshold=100, minLineLength=img_size/4 (too strict!)
+    # New: threshold=50, minLineLength=img_size/8 (more forgiving)
     lines = cv2.HoughLinesP(
         edges,
         rho=1,
         theta=np.pi/180,
-        threshold=100,
-        minLineLength=min(panel_img.shape[:2]) // 4,  # At least 1/4 of image size
-        maxLineGap=10
+        threshold=50,  # REDUCED from 100 to 50 (less strict)
+        minLineLength=min(panel_img.shape[:2]) // 8,  # REDUCED from //4 to //8 (shorter lines OK)
+        maxLineGap=20  # INCREASED from 10 to 20 (allows gaps for tick marks)
     )
 
     if lines is None:
@@ -451,6 +454,81 @@ def detect_unit(text: str, axis_type: str) -> str:
             return 'probability'  # Default
 
 
+def extract_axis_with_fixed_region(
+    panel_array: np.ndarray,
+    axis_type: str = 'x'
+) -> AxisInfo:
+    """
+    FALLBACK OCR: Try fixed regions when Hough fails to detect axis lines.
+
+    Uses standard axis label locations:
+    - X-axis: bottom 10% of image
+    - Y-axis: left 10% of image
+
+    This is critical for plots where Hough fails due to:
+    - Missing or faint axis lines
+    - Grid lines interfering
+    - Non-standard plot formatting
+    """
+    h, w = panel_array.shape[:2]
+
+    if axis_type == 'x':
+        # X-axis labels are typically in bottom 10% of image
+        label_region = (0, int(h * 0.9), w, int(h * 0.1))
+        x, y, w_region, h_region = label_region
+    else:  # y-axis
+        # Y-axis labels are typically in left 10% of image
+        label_region = (0, 0, int(w * 0.1), h)
+        x, y, w_region, h_region = label_region
+
+    # Validate region
+    if w_region <= 0 or h_region <= 0:
+        if axis_type == 'x':
+            return AxisInfo(0, 60, 'months', '', [], [], 0.0, 'fallback_invalid_region')
+        else:
+            return AxisInfo(0, 1, 'probability', '', [], [], 0.0, 'fallback_invalid_region')
+
+    # Crop to label region
+    label_img = panel_array[y:y+h_region, x:x+w_region]
+
+    # Enhanced pre-processing
+    processed = enhance_for_ocr(label_img)
+
+    # Multi-engine OCR
+    text, confidence, engine = multi_engine_ocr(processed)
+
+    # Pattern-based number extraction
+    numbers = extract_numbers_with_patterns(text, axis_type)
+
+    # Determine min/max
+    if len(numbers) >= 2:
+        min_val = min(numbers)
+        max_val = max(numbers)
+        method = f'fixed_region_{engine}'
+    else:
+        # Fallback to defaults
+        if axis_type == 'x':
+            min_val, max_val = 0, 60  # Default: 0-60 months
+        else:
+            min_val, max_val = 0, 1  # Default: 0-1 probability
+        method = 'fallback_no_numbers_found'
+        confidence = 0.0
+
+    # Detect unit
+    unit = detect_unit(text, axis_type)
+
+    return AxisInfo(
+        min_value=min_val,
+        max_value=max_val,
+        unit=unit,
+        label=text,
+        tick_values=numbers,
+        tick_positions=[],
+        confidence=confidence,
+        method=method
+    )
+
+
 def auto_calibrate_axes_v2(
     panel_img: Image.Image,
     panel_bbox: Tuple[int, int, int, int]
@@ -465,7 +543,7 @@ def auto_calibrate_axes_v2(
     2. Enhanced OCR pre-processing
     3. Multi-engine OCR (Tesseract + EasyOCR)
     4. Pattern-based extraction
-    5. Robust fallbacks
+    5. Robust fallbacks (NEW: fixed region OCR when Hough fails)
 
     Expected success rate: 80-90% (vs 0% with original)
     """
@@ -479,33 +557,15 @@ def auto_calibrate_axes_v2(
     if x_axis_line is not None:
         x_axis_info = extract_axis_with_improved_ocr(panel_array, x_axis_line, 'x')
     else:
-        # Fallback: x-axis
-        x_axis_info = AxisInfo(
-            min_value=0,
-            max_value=60,
-            unit='months',
-            label='',
-            tick_values=[],
-            tick_positions=[],
-            confidence=0.0,
-            method='fallback_no_axis_detected'
-        )
+        # NEW FALLBACK: Try fixed region OCR instead of immediately giving up
+        x_axis_info = extract_axis_with_fixed_region(panel_array, 'x')
 
     # Extract y-axis
     if y_axis_line is not None:
         y_axis_info = extract_axis_with_improved_ocr(panel_array, y_axis_line, 'y')
     else:
-        # Fallback: y-axis
-        y_axis_info = AxisInfo(
-            min_value=0,
-            max_value=1,
-            unit='probability',
-            label='',
-            tick_values=[],
-            tick_positions=[],
-            confidence=0.0,
-            method='fallback_no_axis_detected'
-        )
+        # NEW FALLBACK: Try fixed region OCR instead of immediately giving up
+        y_axis_info = extract_axis_with_fixed_region(panel_array, 'y')
 
     # Combine into calibration dict (same format as original)
     calibration = {
