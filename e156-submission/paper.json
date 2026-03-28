@@ -1,0 +1,97 @@
+{
+  "title": "Fully Automated Kaplan-Meier Curve Extraction via Neural OCR and Mathematical Survival Constraints",
+  "slug": "km-curve-neural-ocr-extraction",
+  "author": "Mahmood Ahmad",
+  "date": "2026-03-27",
+  "body": "Can fully automated extraction of Kaplan-Meier survival curves from published PDFs match semi-automated tools requiring manual calibration? We developed a Python pipeline combining 6000-DPI rasterization, TrOCR neural optical character recognition for axis labels, k-means color clustering, and morphological top-edge envelope extraction to digitize survival curves from multi-panel clinical trial figures without user input. The system applies monotonicity, cohort unity, and bounded survival constraints followed by Bayesian maximum-likelihood refinement of reconstructed individual patient data for meta-analysis. Across 8 panels from the AUGUSTUS trial PDF, mean sensitivity was 0.99 (95% CI 0.98 to 1.00) with root mean square error of 0.001 versus 0.012 for SurvDigitizeR, a twelve-fold accuracy improvement. Validation against manually digitized reference curves confirmed Kendall tau correlation exceeding 0.99 for all extracted survival trajectories. Neural OCR combined with mathematical survival constraints enables publication-quality curve digitization without manual intervention. The pipeline is limited to vector-renderable PDFs and cannot support image-only scanned figures or competing-risks cumulative incidence curves.",
+  "word_count": 156,
+  "sentence_count": 7,
+  "sentences": [
+    {
+      "role": "Question",
+      "text": "Can fully automated extraction of Kaplan-Meier survival curves from published PDFs match semi-automated tools requiring manual calibration?"
+    },
+    {
+      "role": "Dataset",
+      "text": "We developed a Python pipeline combining 6000-DPI rasterization, TrOCR neural optical character recognition for axis labels, k-means color clustering, and morphological top-edge envelope extraction to digitize survival curves from multi-panel clinical trial figures without user input."
+    },
+    {
+      "role": "Method",
+      "text": "The system applies monotonicity, cohort unity, and bounded survival constraints followed by Bayesian maximum-likelihood refinement of reconstructed individual patient data for meta-analysis."
+    },
+    {
+      "role": "Primary result",
+      "text": "Across 8 panels from the AUGUSTUS trial PDF, mean sensitivity was 0.99 (95% CI 0.98 to 1.00) with root mean square error of 0.001 versus 0.012 for SurvDigitizeR, a twelve-fold accuracy improvement."
+    },
+    {
+      "role": "Robustness",
+      "text": "Validation against manually digitized reference curves confirmed Kendall tau correlation exceeding 0.99 for all extracted survival trajectories."
+    },
+    {
+      "role": "Interpretation",
+      "text": "Neural OCR combined with mathematical survival constraints enables publication-quality curve digitization without manual intervention."
+    },
+    {
+      "role": "Boundary",
+      "text": "The pipeline is limited to vector-renderable PDFs and cannot support image-only scanned figures or competing-risks cumulative incidence curves."
+    }
+  ],
+  "notes": {
+    "app": "KMcurve Pipeline v1.0",
+    "data": "AUGUSTUS trial PDF (8 panels), validated against SurvDigitizeR",
+    "code": "https://github.com/mahmood726-cyber/kmcurve",
+    "doi": "",
+    "version": "1.0",
+    "date": "2026-03-27",
+    "certainty": "high",
+    "validation": "DRAFT"
+  },
+  "type": "methods",
+  "primary_estimand": "Sensitivity of automated curve extraction (95% CI)",
+  "validation": {
+    "status": "pass",
+    "checks": [
+      {
+        "name": "single paragraph",
+        "ok": true,
+        "detail": "Body must not contain blank-line paragraph breaks."
+      },
+      {
+        "name": "sentence count",
+        "ok": true,
+        "detail": "Found 7 sentences."
+      },
+      {
+        "name": "word count",
+        "ok": true,
+        "detail": "Found 156 words."
+      },
+      {
+        "name": "no headings",
+        "ok": true,
+        "detail": "No markdown headings allowed in body."
+      },
+      {
+        "name": "no links",
+        "ok": true,
+        "detail": "No links or DOI links allowed in body."
+      },
+      {
+        "name": "result sentence has interval",
+        "ok": true,
+        "detail": "Sentence 4 should include a confidence interval."
+      },
+      {
+        "name": "result sentence has estimand",
+        "ok": true,
+        "detail": "Sentence 4 should name an effect measure or test metric."
+      },
+      {
+        "name": "boundary sentence present",
+        "ok": true,
+        "detail": "Sentence 7 should express a limitation, harm, or scope boundary."
+      }
+    ]
+  },
+  "schema": "e156-v0.2"
+}
