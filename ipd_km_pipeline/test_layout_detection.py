@@ -12,12 +12,12 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).parent))
 
 from layout.detect import detect_panels, visualize_panels
+from project_paths import artifact_path, ensure_dir, sample_render_path
 
 
 def main():
-    # Path to extracted page image
-    page_img_path = "C:/Users/user/OneDrive - NHS/Documents/KMcurve/ipd_km_pipeline/artifacts/test_extraction/page_6/page6_00_render_307d2428fec305a8.png"
-    output_dir = "C:/Users/user/OneDrive - NHS/Documents/KMcurve/ipd_km_pipeline/artifacts/layout_detection"
+    page_img_path = sample_render_path()
+    output_dir = ensure_dir(artifact_path("layout_detection"))
 
     print("="*70)
     print("Layout Detection Test")
@@ -27,8 +27,6 @@ def main():
     print("="*70)
 
     # Create output directory
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-
     # Load image
     print("\n[1/3] Loading image...")
     image = Image.open(page_img_path)
@@ -69,7 +67,7 @@ def main():
 
     # Visualize panels
     print("\n[3/3] Creating visualization...")
-    viz_path = Path(output_dir) / "panel_detection.png"
+    viz_path = output_dir / "panel_detection.png"
     visualize_panels(image, panels, str(viz_path))
     print(f"    Saved: {viz_path}")
 

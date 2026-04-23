@@ -1,10 +1,21 @@
 #!/usr/bin/env Rscript
 # Quick test script
-setwd("C:/Users/user/OneDrive - NHS/Documents/KMcurve")
+args <- commandArgs(trailingOnly = FALSE)
+file_arg <- grep("^--file=", args, value = TRUE)
+script_dir <- if (length(file_arg)) {
+  dirname(normalizePath(sub("^--file=", "", file_arg[[1]])))
+} else {
+  normalizePath(getwd())
+}
+
+old_wd <- getwd()
+on.exit(setwd(old_wd), add = TRUE)
+setwd(script_dir)
+
 source("km_pdf_vector_extract_ultra.R")
 
-# Use C:/temp for SVG processing to avoid space issues
-temp_dir <- "C:/temp/km_svgs"
+# Use a repo-local temp directory
+temp_dir <- file.path(tempdir(), "km_svgs")
 dir.create(temp_dir, recursive = TRUE, showWarnings = FALSE)
 
 pdf_file <- "papers_to_process/NEJMoa0802987.pdf"
@@ -22,6 +33,7 @@ if (length(result) > 0) {
   cat("Panels found:", nrow(bound$panels), "\n")
 
   # Save CSV
-  readr::write_csv(bound$curves, "test_curves.csv")
-  cat("Curves saved to test_curves.csv\n")
+  output_csv <- file.path(script_dir, "test_curves.csv")
+  readr::write_csv(bound$curves, output_csv)
+  cat("Curves saved to", output_csv, "\n")
 }

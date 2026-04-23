@@ -2,23 +2,21 @@
 """
 End-to-end K-M curve extraction pipeline.
 
-Demonstrates complete workflow:
-1. PDF extraction
-2. Panel detection
-3. Curve extraction
-4. Manual axis calibration (OCR can be added later)
-5. Coordinate transformation to survival data
+This script is a repo-local sample runner for the maintained `ipd_km_pipeline`
+workflow. It now defaults to bundled fixtures instead of OneDrive-specific paths.
 """
+import argparse
 import sys
 from pathlib import Path
-from PIL import Image
+
 import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from pdf_io.extract import extract_images_from_pdf, save_extracted_images
-from layout.detect import detect_panels, visualize_panels
+from pdf_io.extract import extract_images_from_pdf
+from layout.detect import detect_panels
+from project_paths import artifact_path, ensure_dir, sample_pdf_path
 from raster_cv.extract import extract_curves, visualize_extracted_curves
 
 
@@ -87,26 +85,76 @@ def aggregate_survival_data(times: np.ndarray, probs: np.ndarray, time_step: flo
     })
 
 
-def main():
+def parse_args(argv=None):
+    """Parse command line arguments for the sample pipeline runner."""
+    parser = argparse.ArgumentParser(
+        description="Run the sample KM extraction pipeline on a bundled or user-supplied PDF."
+    )
+    parser.add_argument(
+        "--pdf",
+        dest="pdf_path",
+        help="Path to the PDF to process. Defaults to the bundled NEJM sample PDF.",
+    )
+    parser.add_argument(
+        "--page-num",
+        type=int,
+        default=6,
+        help="0-indexed PDF page number to process. Default: 6 (page 7).",
+    )
+    parser.add_argument(
+        "--dpi",
+        type=int,
+        default=600,
+        help="Render DPI used when rasterizing the page. Default: 600.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Directory for generated images/CSVs. Defaults to ipd_km_pipeline/artifacts/end_to_end.",
+    )
+    parser.add_argument(
+        "--force-render",
+        action="store_true",
+        help="Skip vector/native extraction attempts and force raster rendering.",
+    )
+    return parser.parse_args(argv)
+
+
+def resolve_paths(args):
+    """Resolve repo-relative defaults for the sample pipeline."""
+    if args.pdf_path:
+        pdf_path = Path(args.pdf_path).expanduser().resolve()
+    else:
+        pdf_path = sample_pdf_path()
+
+    if args.output_dir:
+        output_dir = Path(args.output_dir).expanduser()
+    else:
+        output_dir = artifact_path("end_to_end")
+
+    ensure_dir(output_dir)
+    return pdf_path, output_dir
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    pdf_path, output_dir = resolve_paths(args)
+
     print("="*70)
     print("End-to-End K-M Curve Extraction Pipeline")
     print("="*70)
-
-    # Paths
-    pdf_path = "C:/Users/user/OneDrive - NHS/Documents/KMcurve/papers_to_process/NEJMoa0802987.pdf"
-    output_dir = "C:/Users/user/OneDrive - NHS/Documents/KMcurve/ipd_km_pipeline/artifacts/end_to_end"
-
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    print(f"PDF: {pdf_path}")
+    print(f"Output: {output_dir}")
 
     # Step 1: Extract page from PDF
     print("\n[1/5] Extracting page from PDF...")
-    page_num = 6  # 0-indexed (page 7)
+    page_num = args.page_num
 
     results = extract_images_from_pdf(
-        pdf_path=pdf_path,
+        pdf_path=str(pdf_path),
         page_num=page_num,
-        dpi=600,
-        force_render=False
+        dpi=args.dpi,
+        force_render=args.force_render,
     )
 
     if not results:
@@ -148,7 +196,7 @@ def main():
         print(f"      Curve {i+1}: {curve['n_points']} points")
 
     # Save visualization
-    viz_path = Path(output_dir) / "curves_extracted.png"
+    viz_path = output_dir / "curves_extracted.png"
     visualize_extracted_curves(panel_img, curves, str(viz_path))
 
     # Step 4: Manual axis calibration
@@ -183,7 +231,7 @@ def main():
         df = aggregate_survival_data(times, values, time_step=1.0)
 
         # Save to CSV
-        csv_path = Path(output_dir) / f"curve_{curve_id}_data.csv"
+        csv_path = output_dir / f"curve_{curve_id}_data.csv"
         df.to_csv(csv_path, index=False)
 
         print(f"    Curve {curve_id}:")

@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from pdf_io.extract import extract_images_from_pdf, save_extracted_images
+from project_paths import artifact_path, ensure_dir, sample_pdf_path
 
 
 def test_page(pdf_path, page_num, output_dir):
@@ -59,9 +60,8 @@ def test_page(pdf_path, page_num, output_dir):
 
 
 def main():
-    # Paths
-    pdf_path = "C:/Users/user/OneDrive - NHS/Documents/KMcurve/papers_to_process/NEJMoa0802987.pdf"
-    output_dir = "C:/Users/user/OneDrive - NHS/Documents/KMcurve/ipd_km_pipeline/artifacts/test_extraction"
+    pdf_path = sample_pdf_path()
+    output_dir = ensure_dir(artifact_path("test_extraction"))
 
     print("="*70)
     print("PDF-to-Image Extraction Test")
@@ -75,7 +75,7 @@ def main():
 
     results = {}
     for page_num in pages_to_test:
-        success = test_page(pdf_path, page_num, output_dir)
+        success = test_page(str(pdf_path), page_num, str(output_dir))
         results[page_num] = success
 
     # Summary

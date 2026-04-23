@@ -7,13 +7,12 @@ and keep only the solid "Intensive control" curve.
 """
 import sys
 from pathlib import Path
-from PIL import Image
-import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from pdf_io.extract import extract_images_from_pdf
 from layout.detect import detect_panels
+from project_paths import artifact_path, ensure_dir, sample_pdf_path
 from raster_cv.extract import extract_curves
 from raster_cv.dotted_line_filter import visualize_dotted_detection
 
@@ -22,16 +21,13 @@ def main():
     print("Testing Dotted Line Filtering")
     print("="*70)
 
-    # Paths
-    pdf_path = "C:/Users/user/OneDrive - NHS/Documents/KMcurve/papers_to_process/NEJMoa0802987.pdf"
-    output_dir = "C:/Users/user/OneDrive - NHS/Documents/KMcurve/ipd_km_pipeline/artifacts/dotted_filter_test"
-
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    pdf_path = sample_pdf_path()
+    output_dir = ensure_dir(artifact_path("dotted_filter_test"))
 
     # Step 1: Extract page
     print("\n[1/4] Extracting page from PDF...")
     results = extract_images_from_pdf(
-        pdf_path=pdf_path,
+        pdf_path=str(pdf_path),
         page_num=6,
         dpi=600,
         force_render=False
@@ -85,7 +81,7 @@ def main():
                 print(f"        Horizontality: {diag['horizontal']['horizontality']:.4f}")
 
     # Save visualization with all curves
-    viz_all_path = Path(output_dir) / "all_curves_labeled.png"
+    viz_all_path = output_dir / "all_curves_labeled.png"
     visualize_dotted_detection(curves_all, w, h, str(viz_all_path))
 
     # Step 4: Extract curves WITH filtering dotted lines
@@ -106,7 +102,7 @@ def main():
               f"{'DOTTED' if is_dotted else 'SOLID'} (confidence: {confidence:.3f})")
 
     # Save visualization with filtered curves
-    viz_filtered_path = Path(output_dir) / "solid_curves_only.png"
+    viz_filtered_path = output_dir / "solid_curves_only.png"
     visualize_dotted_detection(curves_solid, w, h, str(viz_filtered_path))
 
     # Summary

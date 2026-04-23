@@ -84,8 +84,9 @@ def extract_numbers_from_text(text: str, axis_type: str = 'x') -> List[float]:
 
     # Filter by axis type
     if axis_type == 'x':
-        # X-axis: typically time (0-120 months)
-        numbers = [n for n in numbers if 0 <= n <= 200]
+        # X-axis: typically time (0-400 months = 33 years)
+        # Increased to support long-term studies (20-25 year follow-up)
+        numbers = [n for n in numbers if 0 <= n <= 400]
     else:  # y-axis
         # Y-axis: typically probability (0-1 or 0-100%)
         numbers = [n for n in numbers if 0 <= n <= 1.1]  # Allow slight overshoot
@@ -305,10 +306,211 @@ def calibrate_axes_from_pdf(
         Tuple of (x_axis_info, y_axis_info)
         Either or both can be None if extraction fails
     """
+    # Try method 1: Extract from same page as figure
     x_axis = extract_axis_from_pdf_text(pdf_path, page_num, figure_bbox, 'x')
     y_axis = extract_axis_from_pdf_text(pdf_path, page_num, figure_bbox, 'y')
 
+    # Try method 2: R-generated PDFs have text on subsequent pages
+    if x_axis is None or y_axis is None:
+        x_axis_r, y_axis_r = extract_from_r_generated_pdf(pdf_path)
+        if x_axis is None:
+            x_axis = x_axis_r
+        if y_axis is None:
+            y_axis = y_axis_r
+
     return x_axis, y_axis
+
+
+def find_evenly_spaced_sequence(numbers: List[float]) -> List[float]:
+    """
+    Find the best evenly-spaced sequence in a list of numbers.
+
+    Axis tick marks are typically evenly spaced (e.g., 0, 12, 24, 36, 48, 60),
+    while patient counts are irregular (e.g., 100, 95, 68, 50, 41, 33).
+
+    Args:
+        numbers: List of numbers to analyze
+
+    Returns:
+        The best evenly-spaced subsequence found
+    """
+    if len(numbers) < 3:
+        return numbers
+
+    numbers = sorted(set(numbers))
+
+    # Try to find evenly-spaced sequences
+    candidates = []
+
+    for i in range(len(numbers) - 2):
+        for j in range(i + 1, len(numbers) - 1):
+            # Try this interval
+            interval = numbers[j] - numbers[i]
+            if interval <= 0:
+                continue
+
+            # Build sequence with this interval starting from numbers[i]
+            sequence = [numbers[i]]
+            current = numbers[i]
+
+            for k in range(j, len(numbers)):
+                expected = current + interval
+                # Allow 5% tolerance for floating point errors
+                if abs(numbers[k] - expected) / interval < 0.05:
+                    sequence.append(numbers[k])
+                    current = numbers[k]
+
+            # Only keep sequences with at least 3 values
+            if len(sequence) >= 3:
+                # Calculate a score for this sequence
+                score = 0
+
+                # 1. Length score (longer is better) - weight: 100 per tick
+                score += len(sequence) * 100
+
+                # 2. Bonus for starting with 0 (K-M curves almost always start at time=0) - weight: 500
+                if abs(sequence[0]) < 0.01:
+                    score += 500
+
+                # 3. Bonus for spanning full range (min to max) - weight: 300
+                data_range = max(numbers) - min(numbers)
+                seq_range = max(sequence) - min(sequence)
+                if data_range > 0:
+                    range_coverage = seq_range / data_range
+                    score += 300 * range_coverage
+
+                # 4. Small bonus for sequences ending with the max value - weight: 100
+                if abs(sequence[-1] - max(numbers)) < 0.01:
+                    score += 100
+
+                # 5. Small bonus for sequences starting with the min value - weight: 100
+                if abs(sequence[0] - min(numbers)) < 0.01:
+                    score += 100
+
+                candidates.append((score, sequence))
+
+    # Return the sequence with the highest score
+    if candidates:
+        best_score, best_sequence = max(candidates, key=lambda x: x[0])
+        return best_sequence
+
+    # Otherwise, return all numbers sorted
+    return numbers
+
+
+def extract_from_r_generated_pdf(pdf_path: str) -> Tuple[Optional[AxisInfo], Optional[AxisInfo]]:
+    """
+    Extract axis calibration from R-generated K-M plots with SPATIAL FILTERING.
+
+    R's ggsurvplot renders axis labels as vector graphics on page 0,
+    but creates a text layer on page 1 containing the axis values.
+
+    CRITICAL FIX (v4): Use spatial filtering to EXCLUDE the risk table region!
+    - Risk table is typically in bottom 30-40% of page
+    - Axis labels are in the margins (left and bottom edges)
+    - We must NOT extract numbers from the risk table
+
+    Strategy:
+    1. Open PDF and get page 1 dimensions
+    2. Extract text ONLY from axis regions (left and bottom edges)
+    3. EXCLUDE risk table region (bottom 30-40% of page)
+    4. Parse numbers from axis regions only
+    5. Build AxisInfo for both axes
+
+    Args:
+        pdf_path: Path to PDF file
+
+    Returns:
+        Tuple of (x_axis_info, y_axis_info)
+    """
+    try:
+        doc = fitz.open(pdf_path)
+
+        if len(doc) < 2:
+            # No page 1, can't extract
+            return None, None
+
+        page = doc[1]
+        page_rect = page.rect
+        page_width = page_rect.width
+        page_height = page_rect.height
+
+        # Define AXIS REGIONS (exclude risk table!)
+        # CRITICAL: Must include ENTIRE axis range but EXCLUDE risk table
+
+        # X-axis region: horizontal strip from bottom of plot to above risk table
+        # Plot area is typically 10-75% of page height
+        # Risk table starts around 75-80% of page height
+        x_axis_region = (
+            0,  # x0 (left edge)
+            page_height * 0.10,  # y0 (start higher to include more plot area)
+            page_width,  # x1 (right edge)
+            page_height * 0.75   # y1 (stop just above risk table at ~75%)
+        )
+
+        # Y-axis region: vertical strip on left side, FULL vertical range
+        # MUST include top of page to capture "1.0" label!
+        # Risk table is on right side, so left 25% should be safe
+        y_axis_region = (
+            0,  # x0 (left edge)
+            0,  # y0 (START AT TOP to capture 1.0!)
+            page_width * 0.25,  # x1 (left quarter of page)
+            page_height * 0.85  # y1 (almost to bottom, but above risk table)
+        )
+
+        # Extract text from X-axis region ONLY
+        x_axis_blocks = get_text_blocks_in_region(page, x_axis_region)
+        x_axis_text = " ".join([block["text"] for block in x_axis_blocks])
+
+        # Extract text from Y-axis region ONLY
+        y_axis_blocks = get_text_blocks_in_region(page, y_axis_region)
+        y_axis_text = " ".join([block["text"] for block in y_axis_blocks])
+
+        # Extract numbers from AXIS REGIONS (not from risk table!)
+        all_x_numbers = extract_numbers_from_text(x_axis_text, 'x')
+        y_numbers = extract_numbers_from_text(y_axis_text, 'y')
+
+        # Remove Y-axis values (0-1 range) from X-axis candidates
+        all_x_numbers_filtered = [n for n in all_x_numbers if n > 1.5 or n == 0.0]
+
+        # For X-axis, we need to distinguish time values from patient counts
+        # Time values are typically evenly-spaced (e.g., 0, 12, 24, 36, 48, 60)
+        # Patient counts are irregular (e.g., 100, 95, 68, 50, 41, 33...)
+        x_numbers = find_evenly_spaced_sequence(all_x_numbers_filtered)
+
+        # Build X-axis info
+        x_axis = None
+        if len(x_numbers) >= 2:
+            x_axis = AxisInfo(
+                min_value=min(x_numbers),
+                max_value=max(x_numbers),
+                unit=detect_unit_from_text(x_axis_text, 'x'),
+                label='Time',
+                tick_values=x_numbers,
+                tick_positions=[],
+                confidence=0.98,  # Very high confidence for R-generated PDFs
+                method='r_pdf_page1_spatial_filtering'
+            )
+
+        # Build Y-axis info
+        y_axis = None
+        if len(y_numbers) >= 2:
+            y_axis = AxisInfo(
+                min_value=min(y_numbers),
+                max_value=max(y_numbers),
+                unit=detect_unit_from_text(y_axis_text, 'y'),
+                label='Survival Probability',
+                tick_values=y_numbers,
+                tick_positions=[],
+                confidence=0.98,
+                method='r_pdf_page1_spatial_filtering'
+            )
+
+        doc.close()
+        return x_axis, y_axis
+
+    except Exception as e:
+        return None, None
 
 
 # Validation function

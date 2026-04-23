@@ -3,8 +3,8 @@
   "slug": "km-curve-neural-ocr-extraction",
   "author": "Mahmood Ahmad",
   "date": "2026-03-27",
-  "body": "Can fully automated extraction of Kaplan-Meier survival curves from published PDFs match semi-automated tools requiring manual calibration? We developed a Python pipeline combining 6000-DPI rasterization, TrOCR neural optical character recognition for axis labels, k-means color clustering, and morphological top-edge envelope extraction to digitize survival curves from multi-panel clinical trial figures without user input. The system applies monotonicity, cohort unity, and bounded survival constraints followed by Bayesian maximum-likelihood refinement of reconstructed individual patient data for meta-analysis. Across 8 panels from the AUGUSTUS trial PDF, mean sensitivity was 0.99 (95% CI 0.98 to 1.00) with root mean square error of 0.001 versus 0.012 for SurvDigitizeR, a twelve-fold accuracy improvement. Validation against manually digitized reference curves confirmed Kendall tau correlation exceeding 0.99 for all extracted survival trajectories. Neural OCR combined with mathematical survival constraints enables publication-quality curve digitization without manual intervention. The pipeline is limited to vector-renderable PDFs and cannot support image-only scanned figures or competing-risks cumulative incidence curves.",
-  "word_count": 156,
+  "body": "Can fully automated extraction of Kaplan-Meier survival curves from published PDFs match semi-automated tools requiring manual calibration? We developed a Python pipeline combining 6000-DPI rasterization, TrOCR neural optical character recognition for axis labels, k-means color clustering, and morphological top-edge envelope extraction to digitize survival curves from multi-panel clinical trial figures without user input. It applies monotonicity, cohort unity, and bounded survival constraints followed by Bayesian maximum-likelihood refinement of reconstructed individual patient data for meta-analysis. Across 8 panels from the AUGUSTUS trial PDF, mean sensitivity was 0.99 (95% CI 0.98 to 1.00) with root mean square error of 0.001 versus 0.012 for SurvDigitizeR, a twelve-fold accuracy improvement. Validation against manually digitized reference curves confirmed Kendall tau correlation exceeding 0.99 for all extracted survival trajectories. Neural OCR combined with mathematical survival constraints enables publication-quality curve digitization without manual intervention. The pipeline is limited to vector-renderable PDFs and cannot support image-only scanned figures or competing-risks cumulative incidence curves.",
+  "word_count": 155,
   "sentence_count": 7,
   "sentences": [
     {
@@ -17,7 +17,7 @@
     },
     {
       "role": "Method",
-      "text": "The system applies monotonicity, cohort unity, and bounded survival constraints followed by Bayesian maximum-likelihood refinement of reconstructed individual patient data for meta-analysis."
+      "text": "It applies monotonicity, cohort unity, and bounded survival constraints followed by Bayesian maximum-likelihood refinement of reconstructed individual patient data for meta-analysis."
     },
     {
       "role": "Primary result",
@@ -39,7 +39,7 @@
   "notes": {
     "app": "KMcurve Pipeline v1.0",
     "data": "AUGUSTUS trial PDF (8 panels), validated against SurvDigitizeR",
-    "code": "https://github.com/mahmood726-cyber/kmcurve",
+    "code": "https://github.com/mahmood726-cyber/KMcurve",
     "doi": "",
     "version": "1.0",
     "date": "2026-03-27",
@@ -64,7 +64,7 @@
       {
         "name": "word count",
         "ok": true,
-        "detail": "Found 156 words."
+        "detail": "Found 155 words."
       },
       {
         "name": "no headings",

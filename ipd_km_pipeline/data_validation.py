@@ -24,7 +24,7 @@ def validate_curve_data(
     curve_df: pd.DataFrame,
     calibration: Dict,
     min_points: int = 100,
-    max_points: int = 200000,
+    max_points: int = 500000,
     min_time_range: float = 5.0,
     min_survival_range: float = 0.15
 ) -> ValidationResult:

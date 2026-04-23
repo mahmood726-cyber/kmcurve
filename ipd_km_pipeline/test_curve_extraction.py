@@ -13,13 +13,13 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent))
 
 from layout.detect import detect_panels
+from project_paths import artifact_path, ensure_dir, sample_render_path
 from raster_cv.extract import extract_curves, visualize_extracted_curves
 
 
 def main():
-    # Paths
-    page_img_path = "C:/Users/user/OneDrive - NHS/Documents/KMcurve/ipd_km_pipeline/artifacts/test_extraction/page_6/page6_00_render_307d2428fec305a8.png"
-    output_dir = "C:/Users/user/OneDrive - NHS/Documents/KMcurve/ipd_km_pipeline/artifacts/curve_extraction"
+    page_img_path = sample_render_path()
+    output_dir = ensure_dir(artifact_path("curve_extraction"))
 
     print("="*70)
     print("Curve Extraction Test")
@@ -29,8 +29,6 @@ def main():
     print("="*70)
 
     # Create output directory
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-
     # Load image
     print("\n[1/4] Loading image...")
     image = Image.open(page_img_path)
@@ -73,7 +71,7 @@ def main():
             print(f"          Y range: {np.min(curve['points'][:, 1]):.0f} - {np.max(curve['points'][:, 1]):.0f}")
 
         # Visualize extracted curves
-        viz_path = Path(output_dir) / f"panel_{i+1}_curves.png"
+        viz_path = output_dir / f"panel_{i+1}_curves.png"
         visualize_extracted_curves(panel_img, curves, str(viz_path))
         print(f"      Visualization saved: {viz_path}")
 
