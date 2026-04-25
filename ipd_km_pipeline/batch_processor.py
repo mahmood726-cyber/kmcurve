@@ -689,6 +689,23 @@ class BatchProcessor:
         print(f"Curve catalog saved to: {catalog_path}")
 
 
+def process_pdf(pdf_path, pdf_name=None, output_dir=None):
+    """Module-level convenience wrapper around BatchProcessor.process_single_pdf.
+
+    Restored 2026-04-25 because extract_and_validate_curves.py imports it as
+    a free function and the v0 BatchProcessor refactor only exposed the
+    instance method. Returns the same dict that process_single_pdf returns.
+
+    pdf_name is accepted for back-compat (callers pass it) but the method
+    derives the name internally from pdf_path.stem, so the kwarg is ignored.
+    """
+    from pathlib import Path
+    pdf_path = Path(pdf_path)
+    out = Path(output_dir) if output_dir else (pdf_path.parent / "_km_pipeline_out")
+    proc = BatchProcessor(input_dir=pdf_path.parent, output_dir=out)
+    return proc.process_single_pdf(pdf_path)
+
+
 def main():
     import argparse
 
