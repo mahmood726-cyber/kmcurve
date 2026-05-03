@@ -12,9 +12,7 @@ import time
 import json
 from pathlib import Path
 from typing import List, Dict
-import xml.etree.ElementTree as ET
-
-
+from defusedxml import ElementTree as ET
 class KMPDFDownloader:
     """Downloader for K-M curve PDFs from open-access sources."""
 
