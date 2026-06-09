@@ -97,6 +97,24 @@ def test_auto_detect_ticks_and_calibrate():
     assert abs(fit.value(50) - 0.0) < 0.5 and abs(fit.value(350) - 30.0) < 0.5
 
 
+def test_dark_curve_cloud_excludes_text_boxes():
+    """In-plot legend/annotation text (passed as exclude_boxes) must be masked
+    out of the curve cloud -- otherwise it produces spurious spikes."""
+    img = np.full((300, 400), 255, dtype=np.uint8)
+    plot = R.PlotBox(x0=40, y0=20, x1=360, y1=270)
+    img[60, 40:360] = 0                 # a curve near the top
+    img[230:250, 150:250] = 0           # a dark "legend" blob low in the plot
+    legend_box = (148, 228, 252, 252)
+    base = R.dark_curve_cloud(img, plot)
+    masked = R.dark_curve_cloud(img, plot, exclude_boxes=[legend_box])
+    # without exclusion the legend pixels are present; with it they're gone
+    in_legend = lambda c: np.any((c[:, 0] >= 150) & (c[:, 0] <= 250)
+                                 & (c[:, 1] >= 230) & (c[:, 1] <= 250))
+    assert in_legend(base)
+    assert not in_legend(masked)
+    assert masked.shape[0] < base.shape[0]
+
+
 def test_ransac_axis_fit_rejects_outliers():
     """Robust fit recovers the line from a majority of consistent ticks and
     ignores OCR misreads."""
