@@ -276,19 +276,27 @@ def auto_calibrate_axis(gray: np.ndarray, plot: PlotBox, axis: str = "x",
 _RAPIDOCR = None
 
 
+def _ensure_rapidocr() -> bool:
+    """Initialise the RapidOCR singleton; return True if usable."""
+    global _RAPIDOCR
+    if _RAPIDOCR is not None:
+        return True
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+        _RAPIDOCR = RapidOCR()
+        return True
+    except Exception:
+        return False
+
+
 def _rapidocr_numeric(image: np.ndarray):
     """Run RapidOCR once; return numeric detections as (cx, cy, value).
 
     RapidOCR is a detector+recognizer, so each number comes WITH its location
     -- no per-tick cropping needed. Returns [] if RapidOCR isn't installed.
     """
-    global _RAPIDOCR
     import re as _re
-    try:
-        if _RAPIDOCR is None:
-            from rapidocr_onnxruntime import RapidOCR
-            _RAPIDOCR = RapidOCR()
-    except Exception:
+    if not _ensure_rapidocr():
         return []
     res, _ = _RAPIDOCR(image)
     out = []
@@ -304,6 +312,54 @@ def _rapidocr_numeric(image: np.ndarray):
         cy = sum(p[1] for p in box) / 4.0
         out.append((cx, cy, float(nums[0])))
     return out
+
+
+def _rapidocr_all(image: np.ndarray):
+    """All RapidOCR detections as (text, cx, cy). [] if unavailable."""
+    out = []
+    if not _ensure_rapidocr():
+        return out
+    try:
+        res, _ = _RAPIDOCR(image)
+    except Exception:
+        return out
+    for it in (res or []):
+        xs = [p[0] for p in it[0]]; ys = [p[1] for p in it[0]]
+        out.append((str(it[1]), sum(xs) / 4.0, sum(ys) / 4.0))
+    return out
+
+
+def extract_at_risk_raster(image: np.ndarray, plot: PlotBox, row_gap: float = 22.0):
+    """Parse the numbers-at-risk table below a raster KM plot.
+
+    At-risk cells are usually "N" or "N (events)"; we take the LEADING integer
+    of each cell in the band below the x-axis, cluster detections into rows by
+    y, sort each row by x. Returns a list of rows, each a list of (x, N) sorted
+    by x (so row[0] is the baseline N). Empty if RapidOCR unavailable.
+    """
+    import re as _re
+
+    band_top = plot.y1 + 0.18 * (plot.y1 - plot.y0)
+    cells = []
+    for txt, cx, cy in _rapidocr_all(image):
+        if cy < band_top:
+            continue
+        m = _re.match(r"\s*(\d{1,4})", txt)  # leading integer = at-risk count
+        if m and plot.x0 - 40 <= cx <= plot.x1 + 40:
+            cells.append((cx, cy, int(m.group(1))))
+    if not cells:
+        return []
+    cells.sort(key=lambda z: z[1])
+    rows, cur, last = [], [], None
+    for cx, cy, n in cells:
+        if last is None or abs(cy - last) <= row_gap:
+            cur.append((cx, n))
+        else:
+            rows.append(sorted(cur)); cur = [(cx, n)]
+        last = cy
+    if cur:
+        rows.append(sorted(cur))
+    return rows
 
 
 def auto_calibrate_axes(
@@ -377,23 +433,50 @@ def auto_axis_fit(tick_positions: List[float], values: List[float]):
     return axis_from_clicks(list(zip(sorted(tick_positions), sorted(values))))
 
 
+def _rapidocr_text_boxes(image: np.ndarray, pad: int = 3):
+    """All RapidOCR text bounding boxes (x0, top, x1, bottom), padded.
+
+    Used to mask out IN-PLOT TEXT -- legend ("Acoramidis / placebo / Censored"),
+    titles, annotations -- which otherwise contaminate the dark-curve cloud
+    (the legend sits low in the plot and produces spurious downward spikes).
+    """
+    rows = []
+    try:
+        if _ensure_rapidocr():
+            res, _ = _RAPIDOCR(image)
+            for it in (res or []):
+                xs = [p[0] for p in it[0]]
+                ys = [p[1] for p in it[0]]
+                rows.append((min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad))
+    except Exception:
+        pass
+    return rows
+
+
 def dark_curve_cloud(
     gray: np.ndarray,
     plot: PlotBox,
     thresh: int = 140,
     margin: int = 2,
+    exclude_boxes=None,
 ) -> np.ndarray:
     """Return (N, 2) dark-pixel coords (x_px, y_px) inside the plot interior.
 
     Dark pixels (below ``thresh``) within the plot box are curve candidates.
     Axis lines/ticks/labels are excluded by restricting to the interior with a
-    small ``margin``. For overlapping same-colour curves the downstream
-    continuity tracer resolves which pixel belongs to which arm.
+    small ``margin``. ``exclude_boxes`` (e.g. OCR text regions) are masked out
+    so in-plot legend/annotation text doesn't pollute the curve. For
+    overlapping same-colour curves the downstream continuity tracer resolves
+    which pixel belongs to which arm.
     """
     x0, x1 = plot.x0 + margin, plot.x1 - margin
     y0, y1 = plot.y0 + margin, plot.y1 - margin
-    sub = gray[y0:y1, x0:x1]
-    ys, xs = np.where(sub < thresh)
+    sub = (gray[y0:y1, x0:x1] < thresh)
+    for bx0, bt, bx1, bb in (exclude_boxes or []):
+        ix0 = int(max(bx0 - x0, 0)); ix1 = int(max(bx1 - x0, 0))
+        iy0 = int(max(bt - y0, 0)); iy1 = int(max(bb - y0, 0))
+        sub[iy0:iy1, ix0:ix1] = False
+    ys, xs = np.where(sub)
     if xs.size == 0:
         return np.empty((0, 2))
     return np.column_stack([xs + x0, ys + y0]).astype(float)
@@ -427,6 +510,59 @@ def column_curve_points(
         for r in runs[:n_curves]:
             out.append((cx, float(np.median(r))))
     return np.array(out, dtype=float) if out else np.empty((0, 2))
+
+
+def pdf_raster_to_ipd(pdf_path: str, dpi: int = 200,
+                      value_is_cumulative_incidence: bool = False, value_scale: float = 1.0):
+    """FULL raster pipeline on a real PDF: locate -> render -> detect box ->
+    dual-engine auto-calibrate -> text-masked curve extraction -> continuity
+    arm separation -> monotone survival -> at-risk OCR -> Guyot IPD.
+
+    Returns {page, kind, arms:[{label,time,event,n_events,final_survival,total_n}]}.
+    Raises if no KM figure is located or auto-calibration fails closed (then a
+    caller can fall back to 2-click via raster_to_ipd). Needs RapidOCR+Tesseract.
+    """
+    import figure_locator as _FL
+    from manual_calibration import calibrate_points
+    from vector_km import separate_arms
+    from guyot import reconstruct_arm
+
+    cands = _FL.locate_km_figures(pdf_path)
+    if not cands:
+        raise ValueError("no KM figure located")
+    c = cands[0]
+    SC = dpi / 72.0
+    g = render_page(pdf_path, c.page_index, dpi=dpi)
+    if c.bbox:
+        x0, t, x1, b = c.bbox
+        g = g[int(t * SC):int(b * SC), int(x0 * SC):int(x1 * SC)]
+    box = detect_plot_box(g)
+    if box is None:
+        raise ValueError("no plot box detected")
+    x_fit, y_fit = auto_calibrate_axes(g, box)  # fails closed
+    boxes = _rapidocr_text_boxes(g)
+    cloud = column_curve_points(dark_curve_cloud(g, box, exclude_boxes=boxes), n_curves=2)
+    t_, v_ = calibrate_points(cloud, x_fit, y_fit, monotone="none")
+    gap = max(0.02 * (float(np.ptp(v_)) or 1.0), 1e-6)
+    arms = separate_arms(np.column_stack([t_, v_]), n_arms=2, gap=gap)
+    at_risk = extract_at_risk_raster(g, box)
+
+    out = []
+    for i, a in enumerate(arms):
+        if a.size == 0:
+            continue
+        a = a[a[:, 0].argsort()]
+        if value_is_cumulative_incidence:
+            surv = np.clip(1.0 - a[:, 1] / value_scale, 0.0, 1.0)
+        else:
+            surv = np.clip(a[:, 1] / value_scale, 0.0, 1.0)
+        surv = np.minimum.accumulate(surv)  # KM survival is non-increasing
+        tn = at_risk[i][0][1] if i < len(at_risk) and at_risk[i] else None
+        et, ev = reconstruct_arm(a[:, 0], surv, total_n=tn)
+        out.append({"label": f"arm{i}", "time": et, "event": ev,
+                    "n_events": int(ev.sum()), "final_survival": float(surv[-1]),
+                    "total_n": tn})
+    return {"page": c.page_index, "kind": c.kind, "caption": c.caption, "arms": out}
 
 
 def raster_to_ipd(

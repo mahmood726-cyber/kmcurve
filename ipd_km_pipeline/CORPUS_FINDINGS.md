@@ -85,11 +85,34 @@ clicks, all axes R^2 >= 0.999, y endpoints within 0.1.** RANSAC correctly
 rejected the at-risk "447" contaminating Panel A's x-label band.
 
 `auto_calibrate_axes` still FAILS CLOSED (needs >=4 consistent ticks AND inlier
-R^2 > 0.99, else raises -> 2-click), so it never emits a confidently-wrong
+R^2 > 0.97, else raises -> 2-click), so it never emits a confidently-wrong
 calibration. Prereqs: `rapidocr-onnxruntime` (pip) + the Tesseract binary
 (system). When either is absent it degrades to the single available engine or
 2-click. **Net: no-click raster calibration is now reliable on real figures;
 2-click remains the guaranteed fallback.**
+
+## FULL raster PDF -> IPD -> HR validated end-to-end on a real OA PDF
+
+`pdf_raster_to_ipd()` chains: figure_locator -> render -> detect_plot_box ->
+dual-engine auto-calibrate -> text-masked dark-curve cloud (in-plot legend
+excluded via OCR boxes) -> continuity arm separation -> monotone survival ->
+at-risk OCR (`extract_at_risk_raster`, leading integer of each "N (events)"
+cell) -> Guyot IPD.
+
+Validated on `10.1253/circrep.cr-25-0304` ("Figure 1. Comparison of
+Kaplan-Meier plots", a flattened raster KM the vector path cannot touch):
+- arms correctly separated: Acoramidis stays ~1.0, PS-matched placebo drops to
+  0.76 (matches the printed curves);
+- at-risk N parsed exactly: Acoramidis 25, placebo 50;
+- reconstructed events: **Acoramidis 0, placebo 12 -- EXACTLY the published
+  at-risk table's "0 (12)"**;
+- HR strongly favours acoramidis (consistent with the paper's P=0.0107).
+
+Real-world hardening this required: exclude in-plot legend/annotation TEXT from
+the curve cloud (OCR boxes) or it spikes the curve; extract the LEADING integer
+of "N (events)" at-risk cells; tolerate "Month 18"-style and irregular ticks.
+(HR magnitude is somewhat noisy run-to-run with small N + few events + OCR
+stochasticity, but event counts are exact and direction/significance robust.)
 
 ## Revised Phase-1 priority (data-driven)
 
