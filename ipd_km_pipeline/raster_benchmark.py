@@ -56,15 +56,28 @@ def evaluate(pdf: str) -> RasterEval:
     try:
         res = R.pdf_raster_to_ipd(pdf)
     except ValueError as exc:
-        ev.status = "calib_fallback" if "calibrat" in str(exc) else "extract_fail"
-        ev.detail = str(exc)[:60]; return ev
+        # top-level: no panel boxes detected at all
+        ev.status = "no_box"; ev.detail = str(exc)[:60]; return ev
     except Exception as exc:
         ev.status = "error"; ev.detail = f"{type(exc).__name__}: {exc}"[:60]; return ev
 
+    # fine-grained per-panel classification (instrumentation fix): distinguish
+    # calibration failure from extraction failure from real success.
     arms = res["arms"]
     ev.n_arms = len(arms)
-    if len(arms) < 2:
-        ev.status = "extract_fail"; ev.detail = f"{len(arms)} arms"; return ev
+    if not arms:
+        panels = res.get("panels", [])
+        errs = [p.get("error", "") for p in panels if "error" in p]
+        if errs and all("calibrat" in e for e in errs):
+            ev.status = "calib_fail"; ev.detail = errs[0][:60]
+        elif any("arms" in p for p in panels):
+            ev.status = "extract_fail"; ev.detail = "panel(s) <2 arms"
+        elif errs:
+            ev.status = "calib_fail" if any("calibrat" in e for e in errs) else "extract_fail"
+            ev.detail = errs[0][:60]
+        else:
+            ev.status = "extract_fail"; ev.detail = "no arms"
+        return ev
     ev.recon_events = [a["n_events"] for a in arms]
 
     # figure-internal ground truth: reported events from the at-risk table
