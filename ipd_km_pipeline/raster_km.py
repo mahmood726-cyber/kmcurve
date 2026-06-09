@@ -362,6 +362,40 @@ def extract_at_risk_raster(image: np.ndarray, plot: PlotBox, row_gap: float = 22
     return rows
 
 
+def at_risk_reported_events(image: np.ndarray, plot: PlotBox, row_gap: float = 22.0):
+    """Per at-risk row, the max parenthetical events from 'N (events)' cells.
+
+    The at-risk table often reports cumulative events in parentheses, e.g.
+    '46 (4)' ... '0 (12)'. The largest parenthetical in a row is the total
+    events for that arm -- FIGURE-INTERNAL ground truth for validating the
+    reconstruction without any external HR. Returns a list (one per row, by y)
+    of ints, or None for rows with no parenthetical events found.
+    """
+    import re as _re
+
+    band_top = plot.y1 + 0.18 * (plot.y1 - plot.y0)
+    cells = []
+    for txt, cx, cy in _rapidocr_all(image):
+        if cy < band_top or not (plot.x0 - 40 <= cx <= plot.x1 + 40):
+            continue
+        m = _re.search(r"\((\d{1,4})\)", txt)  # parenthetical = cumulative events
+        if m:
+            cells.append((cy, int(m.group(1))))
+    if not cells:
+        return []
+    cells.sort()
+    rows, cur, last = [], [], None
+    for cy, e in cells:
+        if last is None or abs(cy - last) <= row_gap:
+            cur.append(e)
+        else:
+            rows.append(max(cur) if cur else None); cur = [e]
+        last = cy
+    if cur:
+        rows.append(max(cur))
+    return rows
+
+
 def auto_calibrate_axes(
     image: np.ndarray, plot: PlotBox, tol: float = 2.0, min_inlier_frac: float = 0.7,
 ):

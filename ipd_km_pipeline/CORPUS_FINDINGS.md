@@ -114,6 +114,28 @@ of "N (events)" at-risk cells; tolerate "Month 18"-style and irregular ticks.
 (HR magnitude is somewhat noisy run-to-run with small N + few events + OCR
 stochasticity, but event counts are exact and direction/significance robust.)
 
+## Raster pipeline benchmark over the corpus (honest robustness numbers)
+
+`raster_benchmark.py` runs the full raster end-to-end on all 18 corpus PDFs and
+validates reconstructed events against the at-risk table's REPORTED events
+(figure-internal ground truth -- the parenthetical "0 (12)"). Result:
+
+| outcome | n | meaning |
+|---|---|---|
+| success (events > 0) | 1 | circrep: recon events [0, 12] == reported [0, 12] (0 error) |
+| extract_suspect | 2 | 2 arms but 0 total events -> silent extraction failure (flat curves) |
+| calib_fallback | 5 | auto-calibration failed closed -> recoverable with 2-click |
+| extract_fail | 7 | located + (maybe) calibrated but <2 arms separated |
+| no_km_located | 3 | no KM caption (1 is genuinely a flowchart) |
+
+**Honest read: full no-click raster is PROVEN (circrep: events exact) but NOT
+yet robust -- ~1/18 fully-automatic true success today.** The benchmark
+pinpoints the gaps: (a) curve-pixel extraction + arm separation on real figures
+(9/18 = extract_fail + extract_suspect) is the #1 weakness; (b) calibration
+robustness (5/18 fail closed -- the 2-click fallback rescues these). Event
+accuracy where it succeeds AND has ground truth is perfect (0 error). This is
+the measured target list for the next round of raster hardening.
+
 ## Revised Phase-1 priority (data-driven)
 
 1. **Raster fallback, properly built** — CV curve extraction (already partly in
