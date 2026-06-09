@@ -97,6 +97,24 @@ def test_auto_detect_ticks_and_calibrate():
     assert abs(fit.value(50) - 0.0) < 0.5 and abs(fit.value(350) - 30.0) < 0.5
 
 
+def test_ransac_axis_fit_rejects_outliers():
+    """Robust fit recovers the line from a majority of consistent ticks and
+    ignores OCR misreads."""
+    pairs = [(0.0, 0.0), (10.0, 10.0), (20.0, 20.0), (5.0, 99.0), (15.0, 3.0)]
+    fit, n_in = R._ransac_axis_fit(pairs, tol=1.0)
+    assert n_in == 3
+    assert fit.slope == pytest.approx(1.0, abs=1e-6)
+    assert fit.value(30.0) == pytest.approx(30.0, abs=1e-6)
+
+
+def test_ransac_axis_fit_fails_closed_when_too_few_agree():
+    """With <3 consistent ticks the fit RAISES so the caller falls back to
+    2-click -- never emits a confidently-wrong calibration from 2 points."""
+    pairs = [(0.0, 0.0), (10.0, 50.0), (20.0, 3.0), (30.0, 91.0)]  # all scattered
+    with pytest.raises(ValueError):
+        R._ransac_axis_fit(pairs, tol=1.0)
+
+
 def test_raster_to_ipd_orders_event_counts():
     img, plot, _ = _make_two_curve_image()
     nar = [{"times": np.array([0, 30.0]), "counts": np.array([500, 200.0])},

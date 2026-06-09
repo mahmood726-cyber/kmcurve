@@ -57,9 +57,26 @@ direction is unambiguous across 18 PDFs and two acquisition methods.
 primary path.** Built in `raster_km.py`: render → dark-curve pixel cloud →
 (reuses) 2-click calibration + continuity arm separation + Guyot. Validated
 end-to-end on a synthetic 2-curve image (recovers drawn survival within 0.05).
-The remaining hard part is automating calibration on raster (tick OCR) so it
-needs no human clicks — that is the legacy 0%-OCR problem and the key open
-research item.
+
+## Raster auto-calibration: OCR tested, NOT reliable (2026-06-09)
+
+Installed Tesseract 5.4 and built tick OCR (`ocr_tick_values`,
+`auto_calibrate_axis`). **Position detection is exact** (`detect_plot_box` /
+`detect_tick_positions` recover the axis frame and tick pixels perfectly), but
+**OCR of the tick VALUES is unreliable**: benchmarked ~15-60% per-digit
+accuracy, erratic across font sizes (18-40 px), and RANSAC can even return a
+confidently-wrong line from coincidentally-collinear misreads. Best
+preprocessing found (LANCZOS upscale + adaptive mean threshold + tight glyph
+bbox + multi-PSM) helped isolated digits (7/8) but not in-context labels.
+
+This reproduces the legacy 0%-OCR finding (`OCR_INVESTIGATION_RESULTS.md`):
+OCR is the genuine wall. `auto_calibrate_axis` is therefore EXPERIMENTAL and
+**fails closed** — it requires a >=75% inlier majority (and >=3 ticks) or
+raises so the caller uses the reliable **2-click** path (the accepted
+semi-automatic standard; positions are auto-detected, so input is just the
+axis values). Making no-click raster calibration reliable needs a
+digit-specialised OCR/model or a stronger structural solver — a real research
+effort, not a quick win. Until then: **2-click is the working raster path.**
 
 ## Revised Phase-1 priority (data-driven)
 
