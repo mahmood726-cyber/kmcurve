@@ -78,16 +78,22 @@ def run(pdf_path: str, page_index: int = 7) -> dict:
     # ---- 3. Curve fidelity: reconstructed KM vs digitised curve -------------
     print("\n[3] Curve fidelity (reconstructed-IPD KM vs digitised CI), Panel A")
     km_arms = {(a.identity or a.label): a for a in panels[0].arms}
-    drifts = []
+    drifts, rmses = [], []
     for a in pa_ipd.arms:
         et, es = km_from_ipd(a.time, a.event)
         recon_ci = (1 - es[-1]) * 100 if es.size else 0.0
-        input_ci = km_arms[a.label].value[-1]
+        in_arm = km_arms[a.label]
+        input_ci = in_arm.value[-1]
         drift = recon_ci - input_ci
         drifts.append(abs(drift))
+        # full-curve RMSE: reconstructed CI sampled at every digitised time
+        recon_ci_at = (1 - np.interp(in_arm.time, et, es, left=1.0)) * 100
+        rmse = float(np.sqrt(np.mean((recon_ci_at - in_arm.value) ** 2)))
+        rmses.append(rmse)
         print(f"  {a.label:18}: digitised={_fmt(input_ci)}%  reconstructed={_fmt(recon_ci)}%"
-              f"  drift={drift:+.2f}%")
+              f"  endpoint drift={drift:+.2f}%  full-curve RMSE={_fmt(rmse)}%")
     report["max_ci_drift"] = float(max(drifts)) if drifts else None
+    report["max_curve_rmse"] = float(max(rmses)) if rmses else None
 
     # ---- 4. Event counts vs published ---------------------------------------
     print("\n[4] Event counts (Panel A) vs published")

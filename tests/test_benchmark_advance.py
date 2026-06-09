@@ -44,4 +44,7 @@ def test_hazard_ratio_matches_published(report):
 
 
 def test_curve_drift_bounded(report):
+    # endpoint is the worst single point (error accumulates)
     assert report["max_ci_drift"] < 2.0
+    # full-curve fidelity is much tighter than the endpoint
+    assert report["max_curve_rmse"] < 0.5

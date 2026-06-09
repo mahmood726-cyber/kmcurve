@@ -128,31 +128,42 @@ def reconstruct_ipd_guyot(
 
     ipd: List[IPDRecord] = []
     event_carry = 0.0  # fractional-event accumulator (error diffusion)
+    km_recon = 1.0  # reconstructed survival so far (Guyot recursion anchor)
     for i in range(1, len(times)):
-        s_prev, s_curr = survivals[i - 1], survivals[i]
+        s_curr = survivals[i]
         n_prev = n_at_risk[i - 1]
         n_curr = n_at_risk[i] if i < len(n_at_risk) else 1
         t_prev, t_curr = times[i - 1], times[i]
 
-        if s_prev <= 0 or s_curr <= 0:
+        if km_recon <= 0 or s_curr <= 0:
             continue
 
-        cond_prob = 1 - (s_curr / s_prev)
-        # Carry the fractional part of the expected events between intervals so
-        # the cumulative event count tracks the curve without per-interval
-        # rounding bias (which otherwise drifts the reconstructed KM upward).
+        # Guyot recursion: anchor events to the RECONSTRUCTED survival so far,
+        # not the raw digitised previous value. If km_recon has drifted above
+        # the target S, the conditional probability rises and the extra events
+        # pull it back down -- so the reconstructed KM self-corrects onto the
+        # digitised curve instead of accumulating drift.
+        cond_prob = 1.0 - (s_curr / km_recon)
+        cond_prob = min(max(cond_prob, 0.0), 1.0)
         event_carry += n_prev * cond_prob
         n_events = int(np.floor(event_carry))
         event_carry -= n_events
         n_events = max(0, min(n_events, n_prev - 1))
+        # advance the reconstructed survival by the integer events actually placed
+        if n_prev > 0:
+            km_recon *= 1.0 - n_events / n_prev
 
         n_censored = max(0, n_prev - n_curr - n_events)
 
         if n_events > 0:
-            for et in np.linspace(t_prev + 1e-3, t_curr - 1e-3, n_events):
+            for et in np.linspace(t_prev + 1e-3, t_curr - 2e-3, n_events):
                 ipd.append(IPDRecord(time=float(et), event=1, arm=arm))
         if n_censored > 0:
-            for ct in np.linspace(t_prev + 1e-3, t_curr - 1e-3, n_censored):
+            # place censored AFTER the interval's events (just before t_curr) so
+            # they remain at risk for those events (KM/Breslow convention).
+            # Interleaving them would shrink the risk set early and inflate the
+            # KM drops -> systematic upward drift in the recomputed curve.
+            for ct in np.linspace(t_curr - 1e-3, t_curr - 0.5e-3, n_censored):
                 ipd.append(IPDRecord(time=float(ct), event=0, arm=arm))
 
     n_remaining = total_n - len(ipd)
