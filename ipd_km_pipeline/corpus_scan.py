@@ -174,11 +174,23 @@ if __name__ == "__main__":
     import sys
 
     default = str(Path(__file__).resolve().parent / "corpus")
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    corpus = args[0] if args else default
     out = None
     if "--json" in sys.argv:
         out = sys.argv[sys.argv.index("--json") + 1]
+    # positional corpus dir = first arg that is neither a flag nor the --json value
+    positionals = []
+    skip = False
+    for a in sys.argv[1:]:
+        if skip:
+            skip = False
+            continue
+        if a == "--json":
+            skip = True
+            continue
+        if a.startswith("--"):
+            continue
+        positionals.append(a)
+    corpus = positionals[0] if positionals else default
     rep = run(corpus)
     if out:
         Path(out).write_text(json.dumps(rep, indent=2), encoding="utf-8")
