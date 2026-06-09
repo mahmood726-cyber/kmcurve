@@ -103,6 +103,24 @@ def test_detect_plot_boxes_multi_panel():
         assert abs(b.y1 - 260) <= 3      # x-axis at the y-axis bottom, not lower
 
 
+def test_detect_plot_boxes_2x2_grid():
+    """A 2x2 grid of axis frames must be detected as FOUR panels (the case the
+    projection detector merges; morphological detection handles it)."""
+    pytest.importorskip("cv2")
+    H, W = 520, 520
+    img = np.full((H, W), 255, dtype=np.uint8)
+    cols = [(40, 230), (290, 480)]
+    rows = [(20, 220), (270, 470)]   # (y_top, x_axis_y)
+    for ax_x0, ax_x1 in cols:
+        for y_top, ax_y in rows:
+            img[y_top:ax_y + 1, ax_x0] = 0        # y-axis
+            img[ax_y, ax_x0:ax_x1 + 1] = 0        # x-axis
+    boxes = R.detect_plot_boxes(img)
+    assert len(boxes) == 4, [(b.x0, b.y0, b.x1, b.y1) for b in boxes]
+    xs = sorted(set(b.x0 for b in boxes))
+    assert len(xs) == 2  # two distinct columns
+
+
 def test_detect_plot_boxes_single_panel():
     img, _, _ = _make_axes_image()
     boxes = R.detect_plot_boxes(img)
