@@ -2,6 +2,7 @@ PyMuPDF>=1.23.0
 pdfplumber>=0.11.0
 opencv-python-headless==4.10.0.84
 pytesseract==0.3.10
+rapidocr-onnxruntime>=1.3.0  ; raster axis-label OCR (with Tesseract, dual-engine). Needs the Tesseract binary installed system-wide for the pytesseract half.
 pillow==10.4.0
 numpy==1.26.4
 scipy==1.13.1

@@ -69,14 +69,27 @@ confidently-wrong line from coincidentally-collinear misreads. Best
 preprocessing found (LANCZOS upscale + adaptive mean threshold + tight glyph
 bbox + multi-PSM) helped isolated digits (7/8) but not in-context labels.
 
-This reproduces the legacy 0%-OCR finding (`OCR_INVESTIGATION_RESULTS.md`):
-OCR is the genuine wall. `auto_calibrate_axis` is therefore EXPERIMENTAL and
-**fails closed** — it requires a >=75% inlier majority (and >=3 ticks) or
-raises so the caller uses the reliable **2-click** path (the accepted
-semi-automatic standard; positions are auto-detected, so input is just the
-axis values). Making no-click raster calibration reliable needs a
-digit-specialised OCR/model or a stronger structural solver — a real research
-effort, not a quick win. Until then: **2-click is the working raster path.**
+This reproduced the legacy 0%-OCR finding for TESSERACT-ALONE.
+
+## UPDATE: dual-engine OCR makes raster auto-calibration RELIABLE (no clicks)
+
+Tesseract-alone is unreliable, but **RapidOCR (ONNX) + Tesseract are
+complementary**: RapidOCR reads dense x-axis labels Tesseract misses; Tesseract
+reads y-axis labels RapidOCR misses. `auto_calibrate_axes` merges both engines'
+(position, value) detections per axis and robust-fits with RANSAC, which also
+rejects stray numbers (e.g. at-risk counts that fall in the label band).
+
+**Validated on the rasterised ADVANCE figure (a real KM figure rendered to an
+image, known truth x 0-66 / y 25->0): 4/4 panels auto-calibrated with NO
+clicks, all axes R^2 >= 0.999, y endpoints within 0.1.** RANSAC correctly
+rejected the at-risk "447" contaminating Panel A's x-label band.
+
+`auto_calibrate_axes` still FAILS CLOSED (needs >=4 consistent ticks AND inlier
+R^2 > 0.99, else raises -> 2-click), so it never emits a confidently-wrong
+calibration. Prereqs: `rapidocr-onnxruntime` (pip) + the Tesseract binary
+(system). When either is absent it degrades to the single available engine or
+2-click. **Net: no-click raster calibration is now reliable on real figures;
+2-click remains the guaranteed fallback.**
 
 ## Revised Phase-1 priority (data-driven)
 

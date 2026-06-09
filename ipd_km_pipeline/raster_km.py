@@ -273,6 +273,89 @@ def auto_calibrate_axis(gray: np.ndarray, plot: PlotBox, axis: str = "x",
     return fit
 
 
+_RAPIDOCR = None
+
+
+def _rapidocr_numeric(image: np.ndarray):
+    """Run RapidOCR once; return numeric detections as (cx, cy, value).
+
+    RapidOCR is a detector+recognizer, so each number comes WITH its location
+    -- no per-tick cropping needed. Returns [] if RapidOCR isn't installed.
+    """
+    global _RAPIDOCR
+    import re as _re
+    try:
+        if _RAPIDOCR is None:
+            from rapidocr_onnxruntime import RapidOCR
+            _RAPIDOCR = RapidOCR()
+    except Exception:
+        return []
+    res, _ = _RAPIDOCR(image)
+    out = []
+    for it in (res or []):
+        box, txt = it[0], str(it[1]).strip()
+        if _re.fullmatch(r"\d{1,3}(?:\.\d+)?", txt):
+            cx = sum(p[0] for p in box) / 4.0
+            cy = sum(p[1] for p in box) / 4.0
+            out.append((cx, cy, float(txt)))
+    return out
+
+
+def auto_calibrate_axes(
+    image: np.ndarray, plot: PlotBox, tol: float = 2.0, min_inlier_frac: float = 0.7,
+):
+    """Reliable raster auto-calibration via DUAL-ENGINE OCR + RANSAC.
+
+    Collects (position, value) tick candidates from BOTH RapidOCR (band-filtered
+    by location) and Tesseract (per detected tick position), for each axis, then
+    robust-fits. The two engines are complementary (RapidOCR reads dense x-labels
+    that Tesseract misses; Tesseract reads y-labels RapidOCR misses), and RANSAC
+    rejects mis-reads and stray numbers (e.g. at-risk counts in the label band).
+
+    Returns (x_fit, y_fit). Each axis FAILS CLOSED (raises) if too few ticks
+    agree -- caller falls back to 2-click. Validate against the curve.
+    """
+    rapid = _rapidocr_numeric(image)
+    x_cands: List[Tuple[float, float]] = []
+    y_cands: List[Tuple[float, float]] = []
+    # RapidOCR: classify by location relative to the axes
+    band = max(8, int(0.10 * (plot.y1 - plot.y0)))
+    for cx, cy, v in rapid:
+        if plot.y1 < cy <= plot.y1 + band * 2 and plot.x0 - band <= cx <= plot.x1 + band:
+            x_cands.append((cx, v))
+        elif plot.x0 - band * 3 <= cx < plot.x0 and plot.y0 - band <= cy <= plot.y1 + band:
+            y_cands.append((cy, v))
+    # Tesseract per detected tick position (second, complementary source)
+    try:
+        xpos = sorted(detect_tick_positions(image, plot, "x"))
+        for p, v in zip(xpos, ocr_tick_values(image, plot, xpos, "x")):
+            if v is not None:
+                x_cands.append((p, v))
+        ypos = sorted(detect_tick_positions(image, plot, "y"))
+        for p, v in zip(ypos, ocr_tick_values(image, plot, ypos, "y")):
+            if v is not None:
+                y_cands.append((p, v))
+    except Exception:
+        pass
+
+    fits = {}
+    for name, cands in (("x", x_cands), ("y", y_cands)):
+        if len(cands) < 3:
+            raise ValueError(f"auto-calibrate {name}: only {len(cands)} tick candidates")
+        fit, n_in = _ransac_axis_fit(cands, tol)
+        # accept on an ABSOLUTE consistent-tick count + high R^2 on the inliers.
+        # (A fraction of all candidates is too strict: stray numbers like at-risk
+        # counts inflate the denominator. 4 collinear evenly-spaced round-valued
+        # ticks is not a coincidence.) Otherwise fail closed to 2-click.
+        need = 4 if len(cands) >= 5 else 3
+        if n_in < need or fit.r2 < 0.99:
+            raise ValueError(
+                f"auto-calibrate {name}: {n_in} ticks agree (R2={fit.r2:.3f}); "
+                "unreliable -- fall back to 2-click")
+        fits[name] = fit
+    return fits["x"], fits["y"]
+
+
 def auto_axis_fit(tick_positions: List[float], values: List[float]):
     """Build an AxisFit from detected tick POSITIONS + supplied VALUES.
 
