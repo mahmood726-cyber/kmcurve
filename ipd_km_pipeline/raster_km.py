@@ -53,6 +53,84 @@ class PlotBox:
     y1: int  # bottom
 
 
+def detect_plot_box(gray: np.ndarray, thresh: int = 140, frac: float = 0.4) -> Optional[PlotBox]:
+    """Auto-detect the plot interior from axis lines via projection profiles.
+
+    The x-axis is the strongest near-full-width dark horizontal line and the
+    y-axis the strongest near-full-height dark vertical line. Pure numpy (no
+    OpenCV). Returns None if no clear axis frame is found. Removes the need for
+    a manually supplied PlotBox for single-panel raster figures.
+    """
+    dark = gray < thresh
+    H, W = dark.shape
+    col_sum = dark.sum(axis=0)  # vertical lines -> tall columns
+    row_sum = dark.sum(axis=1)  # horizontal lines -> wide rows
+    # y-axis: a column whose dark count covers >= frac of the height; take the
+    # LEFTMOST strong one. x-axis: a row covering >= frac of width; BOTTOM-MOST.
+    col_cand = np.where(col_sum >= frac * H)[0]
+    row_cand = np.where(row_sum >= frac * W)[0]
+    if col_cand.size == 0 or row_cand.size == 0:
+        return None
+    x0 = int(col_cand[0])     # left (y-axis) column
+    y1 = int(row_cand[-1])    # bottom (x-axis) row
+    # derive the other two edges from the actual axis-line extents
+    xaxis_cols = np.where(dark[y1, :])[0]
+    yaxis_rows = np.where(dark[:, x0])[0]
+    x1 = int(xaxis_cols.max()) if xaxis_cols.size else W - 1
+    y0 = int(yaxis_rows.min()) if yaxis_rows.size else 0
+    if x1 - x0 < 0.2 * W or y1 - y0 < 0.2 * H:
+        return None
+    return PlotBox(x0=x0, y0=y0, x1=x1, y1=y1)
+
+
+def detect_tick_positions(
+    gray: np.ndarray, plot: PlotBox, axis: str = "x",
+    thresh: int = 140, band: int = 8, min_gap: int = 4,
+) -> List[float]:
+    """Detect axis tick-mark pixel positions just outside the plot box.
+
+    Ticks are short dark marks perpendicular to the axis, in the margin band
+    beyond it. Returns their centre positions (x for the x-axis, y for the
+    y-axis) as peaks in the margin projection. Pure numpy.
+    """
+    dark = gray < thresh
+    if axis == "x":  # ticks below the x-axis (rows y1 .. y1+band)
+        strip = dark[plot.y1 + 1: plot.y1 + 1 + band, plot.x0: plot.x1 + 1]
+        prof = strip.sum(axis=0)
+        offset = plot.x0
+    else:            # y-axis ticks left of x0 (cols x0-band .. x0)
+        strip = dark[plot.y0: plot.y1 + 1, max(plot.x0 - band, 0): plot.x0]
+        prof = strip.sum(axis=1)
+        offset = plot.y0
+    if prof.size == 0 or prof.max() == 0:
+        return []
+    peak_thresh = max(1, 0.4 * prof.max())
+    peaks, i = [], 0
+    while i < len(prof):
+        if prof[i] >= peak_thresh:
+            j = i
+            while j < len(prof) and prof[j] >= peak_thresh:
+                j += 1
+            peaks.append(offset + (i + j - 1) / 2.0)
+            i = j + min_gap
+        else:
+            i += 1
+    return peaks
+
+
+def auto_axis_fit(tick_positions: List[float], values: List[float]):
+    """Build an AxisFit from detected tick POSITIONS + supplied VALUES.
+
+    Reduces calibration input to the list of axis values (e.g. [0,6,..,66]);
+    OCR can fill these in later for full automation. Requires len match.
+    """
+    from manual_calibration import axis_from_clicks
+
+    if len(tick_positions) != len(values) or len(values) < 2:
+        raise ValueError(f"tick/value count mismatch: {len(tick_positions)} vs {len(values)}")
+    return axis_from_clicks(list(zip(sorted(tick_positions), sorted(values))))
+
+
 def dark_curve_cloud(
     gray: np.ndarray,
     plot: PlotBox,
