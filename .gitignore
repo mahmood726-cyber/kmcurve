@@ -87,3 +87,7 @@ PROGRESS.md
 /ipd_km_pipeline/batch_results*/
 /ipd_km_pipeline/synthetic_batch_results/
 /ipd_km_pipeline/test_single/
+
+# local Sentinel artifacts
+sentinel-findings.jsonl
+sentinel-findings.md
