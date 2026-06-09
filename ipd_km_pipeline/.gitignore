@@ -43,3 +43,6 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# benchmark ground-truth registry is tracked (not a local artifact)
+!benchmark/ground_truth.json
