@@ -151,12 +151,19 @@ preserved exactly ([0,12]). Also fixed two bugs the sub-project surfaced:
 auto y-scale detection (0-1 vs 0-100%; fonc's flat [0,0] was a value_scale=1.0
 artifact) and a RapidOCR LRU-1 cache (multi-panel figures re-ran OCR per panel).
 
-**Negative result: detection was NOT the binding constraint.** Grid detection
-is now correct, but end-to-end success did not improve -- a 2px box shift flips
-circrep's reconstructed events, so the real frontier is downstream EXTRACTION /
-at-risk-pairing FRAGILITY, not panel detection. (Also: the full-corpus
-benchmark is now slow because more panels -> more per-panel Tesseract OCR;
-per-panel tick OCR should be deduped/vectorised next.)
+**RESULT (corrected after the full benchmark finished): success DOUBLED 2 -> 4.**
+An earlier mid-investigation note called this a "negative result" -- that was
+premature (written before the full-corpus re-run completed). The combined
+grid detection + auto y-scale actually flipped two figures to success:
+- bctt (the 3x2 grid) -- now detected as 6 panels and reconstructs;
+- fonc1807364 (2-panel, 0-100% axis) -- auto y-scale fixed the flat [0,0];
+and circrep stayed exact ([0,12], 0 event error). Final taxonomy: success 4,
+calib_fail 7, no_box 4, no_km_located 3, extract_suspect 0 (was 1-2).
+
+The biggest single win was **auto y-scale detection** (percent vs proportion);
+grid detection enabled the multi-panel successes. Remaining gaps: calib_fail
+(7) and no_box (4) -- and the full benchmark is now SLOW (more panels -> more
+per-panel Tesseract OCR; dedup/vectorise per-panel tick OCR next).
 
 ### CORRECTION (instrumented benchmark): calibration, not extraction, is the gap
 
