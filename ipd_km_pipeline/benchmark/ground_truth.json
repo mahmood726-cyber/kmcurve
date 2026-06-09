@@ -1,0 +1,23 @@
+{
+  "_README": "Verified ground-truth registry for the KMcurve benchmark harness. Each panel's published HR/CI MUST be transcribed from a cited source (paper abstract/full text, CT.gov results), never from memory. 'provenance' records where each came from. Add trials by appending entries; pdf paths are relative to the repo root.",
+  "trials": [
+    {
+      "trial_id": "ADVANCE",
+      "nct": "NCT00145925",
+      "pmid": "18539916",
+      "doi": "10.1056/NEJMoa0802987",
+      "pdf": "papers_to_process/NEJMoa0802987.pdf",
+      "page_index": 7,
+      "y_axis": "cumulative_incidence_pct",
+      "intensive_token": "intensive",
+      "standard_token": "standard",
+      "provenance": "PubMed abstract, PMID 18539916 (verified 2026-06-09); NEJM not in PMC so per-panel HRs taken from abstract which reports all four.",
+      "panels": [
+        {"index": 0, "outcome": "Combined major macrovascular and microvascular events", "hr": 0.90, "ci_lower": 0.82, "ci_upper": 0.98, "p": 0.01},
+        {"index": 1, "outcome": "Major macrovascular events", "hr": 0.94, "ci_lower": 0.84, "ci_upper": 1.06, "p": 0.32},
+        {"index": 2, "outcome": "Major microvascular events", "hr": 0.86, "ci_lower": 0.77, "ci_upper": 0.97, "p": 0.01},
+        {"index": 3, "outcome": "Death from any cause", "hr": 0.93, "ci_lower": 0.83, "ci_upper": 1.06, "p": 0.28}
+      ]
+    }
+  ]
+}
