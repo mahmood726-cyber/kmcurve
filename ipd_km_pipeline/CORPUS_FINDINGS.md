@@ -136,6 +136,29 @@ robustness (5/18 fail closed -- the 2-click fallback rescues these). Event
 accuracy where it succeeds AND has ground truth is perfect (0 error). This is
 the measured target list for the next round of raster hardening.
 
+### CORRECTION (instrumented benchmark): calibration, not extraction, is the gap
+
+The earlier "extraction is the dominant gap" was an ARTIFACT of an
+un-instrumented benchmark (every empty-arms result fell into `extract_fail`).
+After making the benchmark classify per-panel failure modes, the true
+breakdown on 18 PDFs is:
+
+| status | n |
+|---|---|
+| calib_fail (auto-calibration fails closed) | **8** |
+| no_box (panel detection found nothing) | 4 |
+| no_km_located | 3 |
+| success | 2 |
+| extract_suspect (flat curves) | 1 |
+
+**So calibration robustness is the #1 lever (8/18); panel detection is #2
+(4/18); curve EXTRACTION is barely a problem (1/18) once calibration passes.**
+Diagnosed root causes among calib_fail: detection sometimes returns a too-wide
+box (e.g. bctt x[77,1198] -> y "ticks" are table numbers, R^2=0.146), and OCR
+reads too few/noisy ticks on some figures (x R^2~0.80). Several calib_fails are
+therefore DOWNSTREAM of detection quality. Lesson: instrument the failure
+taxonomy before deciding what to harden.
+
 ### Update: multi-panel detection added (`detect_plot_boxes`)
 
 Real KM figures are often multi-panel (A/B side-by-side); the old single-box
