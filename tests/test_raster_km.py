@@ -63,6 +63,40 @@ def test_calibrated_survival_matches_drawn_curves():
     assert finals[1] == pytest.approx(finalB, abs=0.05)
 
 
+def _make_axes_image():
+    """White image with a y-axis, x-axis, and ticks at known positions."""
+    H, W = 300, 400
+    img = np.full((H, W), 255, dtype=np.uint8)
+    ax_x0, ax_y1 = 50, 270           # y-axis column, x-axis row
+    img[20:271, ax_x0] = 0           # y-axis vertical line
+    img[ax_y1, 50:351] = 0           # x-axis horizontal line
+    x_ticks = [50, 110, 170, 230, 290, 350]   # values 0,6,12,18,24,30
+    for xt in x_ticks:
+        img[ax_y1 + 1: ax_y1 + 7, xt] = 0      # downward tick marks
+    y_ticks = [270, 210, 150, 90, 30]          # values 0,.25,.5,.75,1.0
+    for yt in y_ticks:
+        img[yt, ax_x0 - 6: ax_x0] = 0          # leftward tick marks
+    return img, x_ticks, y_ticks
+
+
+def test_auto_detect_plot_box():
+    img, _, _ = _make_axes_image()
+    box = R.detect_plot_box(img)
+    assert box is not None
+    assert abs(box.x0 - 50) <= 2 and abs(box.y1 - 270) <= 2
+    assert abs(box.x1 - 350) <= 3 and abs(box.y0 - 20) <= 3
+
+
+def test_auto_detect_ticks_and_calibrate():
+    img, x_ticks, _ = _make_axes_image()
+    box = R.detect_plot_box(img)
+    xs = R.detect_tick_positions(img, box, axis="x")
+    assert len(xs) == len(x_ticks)
+    fit = R.auto_axis_fit(xs, [0, 6, 12, 18, 24, 30])
+    assert fit.r2 > 0.999
+    assert abs(fit.value(50) - 0.0) < 0.5 and abs(fit.value(350) - 30.0) < 0.5
+
+
 def test_raster_to_ipd_orders_event_counts():
     img, plot, _ = _make_two_curve_image()
     nar = [{"times": np.array([0, 30.0]), "counts": np.array([500, 200.0])},
