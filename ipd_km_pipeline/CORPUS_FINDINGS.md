@@ -136,6 +136,28 @@ robustness (5/18 fail closed -- the 2-click fallback rescues these). Event
 accuracy where it succeeds AND has ground truth is perfect (0 error). This is
 the measured target list for the next round of raster hardening.
 
+### Sub-project: grid-robust panel detection (built + validated; a negative result)
+
+Hypothesis: panel detection was the binding constraint (bctt etc. are grids the
+single-box detector merged). Built `_detect_panels_morph` (cv2 morphological
+line extraction -> connected components -> pair each y-axis with the x-axis at
+its bottom-left corner), which handles N x M grids. `detect_plot_boxes` now
+prefers whichever of {projection, morph} finds MORE panels, so grids are gained
+WITHOUT regressing the 1-2 panel cases.
+
+Validated (deterministic): circrep 1/1, fonc1807364 2/2, **bctt 6/6** (the
+3x2 grid the old detector failed), synthetic 2x2 -> 4. circrep end-to-end
+preserved exactly ([0,12]). Also fixed two bugs the sub-project surfaced:
+auto y-scale detection (0-1 vs 0-100%; fonc's flat [0,0] was a value_scale=1.0
+artifact) and a RapidOCR LRU-1 cache (multi-panel figures re-ran OCR per panel).
+
+**Negative result: detection was NOT the binding constraint.** Grid detection
+is now correct, but end-to-end success did not improve -- a 2px box shift flips
+circrep's reconstructed events, so the real frontier is downstream EXTRACTION /
+at-risk-pairing FRAGILITY, not panel detection. (Also: the full-corpus
+benchmark is now slow because more panels -> more per-panel Tesseract OCR;
+per-panel tick OCR should be deduped/vectorised next.)
+
 ### CORRECTION (instrumented benchmark): calibration, not extraction, is the gap
 
 The earlier "extraction is the dominant gap" was an ARTIFACT of an

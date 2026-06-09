@@ -95,18 +95,77 @@ def _cluster_indices(idx, gap: int = 6):
     return [int(np.mean(c)) for c in out]
 
 
+def _detect_panels_morph(
+    gray: np.ndarray, thresh: int = 150, min_frac: float = 0.12, corner_tol: float = 0.04,
+) -> List[PlotBox]:
+    """Grid-robust panel detection via morphological line extraction (cv2).
+
+    Opening the binarised image with a long HORIZONTAL kernel isolates x-axis
+    lines; a long VERTICAL kernel isolates y-axis lines -- both separated from
+    curves/text. Connected components give each axis line individually, so an
+    N x M GRID of panels yields N*M separate y-axes/x-axes. We pair each y-axis
+    with the x-axis line meeting its bottom-left corner -> one PlotBox per
+    panel. Handles 1, 2 (side-by-side) and grid layouts uniformly.
+    Returns [] if cv2 is unavailable (caller falls back to the numpy detector).
+    """
+    try:
+        import cv2
+    except Exception:
+        return []
+    H, W = gray.shape
+    inv = ((gray < thresh).astype(np.uint8)) * 255
+    hk = cv2.getStructuringElement(cv2.MORPH_RECT, (max(W // 12, 25), 1))
+    vk = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(H // 12, 25)))
+    hor = cv2.morphologyEx(inv, cv2.MORPH_OPEN, hk)
+    ver = cv2.morphologyEx(inv, cv2.MORPH_OPEN, vk)
+    nh, _, hs, _ = cv2.connectedComponentsWithStats((hor > 0).astype(np.uint8), 8)
+    nv, _, vs, _ = cv2.connectedComponentsWithStats((ver > 0).astype(np.uint8), 8)
+    hlines = [(hs[i, 0], hs[i, 1], hs[i, 0] + hs[i, 2], hs[i, 1] + hs[i, 3])
+              for i in range(1, nh) if hs[i, 2] >= W * min_frac]
+    vlines = [(vs[i, 0], vs[i, 1], vs[i, 0] + vs[i, 2], vs[i, 1] + vs[i, 3])
+              for i in range(1, nv) if vs[i, 3] >= H * min_frac]
+    boxes = []
+    for vx0, vy0, vx1, vy1 in vlines:
+        vx = (vx0 + vx1) // 2
+        best = None  # x-axis meeting this y-axis bottom-left corner
+        for hx0, hy0, hx1, hy1 in hlines:
+            hy = (hy0 + hy1) // 2
+            if (abs(hy - vy1) <= H * corner_tol and hx0 <= vx + W * 0.03
+                    and hx1 > vx + W * 0.08):
+                if best is None or hx1 > best[2]:
+                    best = (hx0, hy, hx1, hy)
+        if best:
+            boxes.append(PlotBox(x0=int(vx), y0=int(vy0), x1=int(best[2]), y1=int(best[1])))
+    boxes.sort(key=lambda b: (round(b.y0 / 20), b.x0))
+    uniq = []
+    for b in boxes:
+        if not any(abs(b.x0 - u.x0) < 10 and abs(b.y1 - u.y1) < 10 for u in uniq):
+            uniq.append(b)
+    return uniq
+
+
 def detect_plot_boxes(
     gray: np.ndarray, thresh: int = 140, frac: float = 0.35, min_run: float = 0.12,
 ) -> List[PlotBox]:
-    """Detect MULTIPLE plot panels in a raster figure (1, 2 or 2x2 layouts).
+    """Detect MULTIPLE plot panels in a raster figure (1, 2, or N x M grid).
 
-    Real KM figures are often multi-panel; a single merged box wrecks
-    calibration and arm separation. We (1) find the x-axis as the strong
-    horizontal row that the vertical axis lines actually meet (not e.g. an
-    at-risk-table separator), (2) split that row into horizontal RUNS -- one
-    per panel -- and (3) pair each run's left edge with its y-axis line.
-    Returns boxes left-to-right, top-to-bottom. Pure numpy.
+    Combines two detectors and prefers whichever finds MORE panels: the
+    pure-numpy projection detector (reliable for 1-2 panels) and the cv2
+    morphological detector (`_detect_panels_morph`, grid-robust). Using
+    "more panels" as the tie-break adds grid handling (e.g. a 3x2 figure the
+    projection detector merges into one box) WITHOUT regressing the single-/
+    two-panel cases the projection detector already nails. Boxes are returned
+    left-to-right, top-to-bottom.
     """
+    projection = _detect_boxes_projection(gray, thresh=thresh, frac=frac, min_run=min_run)
+    morph = _detect_panels_morph(gray, thresh=max(thresh, 150))
+    return morph if len(morph) > len(projection) else projection
+
+
+def _detect_boxes_projection(
+    gray: np.ndarray, thresh: int = 140, frac: float = 0.35, min_run: float = 0.12,
+) -> List[PlotBox]:
+    """Pure-numpy projection panel detector (no cv2). See detect_plot_boxes."""
     dark = gray < thresh
     H, W = dark.shape
     col = dark.sum(axis=0)
@@ -370,6 +429,31 @@ def _ensure_rapidocr() -> bool:
         return False
 
 
+_OCR_CACHE = {"id": None, "res": None}
+
+
+def _rapidocr_raw(image: np.ndarray):
+    """Run RapidOCR with an LRU-1 cache keyed by the image object id.
+
+    A multi-panel figure calls calibration/text-box/at-risk helpers many times
+    on the SAME rendered array; without this, RapidOCR re-runs inference per
+    panel (a 6-panel figure -> 6x cost). Within one figure the same array is
+    reused, so caching on id(image) dedups it to one inference per figure.
+    """
+    if not _ensure_rapidocr():
+        return []
+    if _OCR_CACHE["id"] == id(image):
+        return _OCR_CACHE["res"]
+    try:
+        res, _ = _RAPIDOCR(image)
+        res = res or []
+    except Exception:
+        res = []
+    _OCR_CACHE["id"] = id(image)
+    _OCR_CACHE["res"] = res
+    return res
+
+
 def _rapidocr_numeric(image: np.ndarray):
     """Run RapidOCR once; return numeric detections as (cx, cy, value).
 
@@ -628,7 +712,7 @@ def column_curve_points(
 
 
 def pdf_raster_to_ipd(pdf_path: str, dpi: int = 200,
-                      value_is_cumulative_incidence: bool = False, value_scale: float = 1.0):
+                      value_is_cumulative_incidence: bool = False, value_scale=None):
     """FULL raster pipeline on a real PDF: locate -> render -> detect box ->
     dual-engine auto-calibrate -> text-masked curve extraction -> continuity
     arm separation -> monotone survival -> at-risk OCR -> Guyot IPD.
@@ -644,6 +728,14 @@ def pdf_raster_to_ipd(pdf_path: str, dpi: int = 200,
 
     def _panel_to_ipd(g, box, text_boxes):
         x_fit, y_fit = auto_calibrate_axes(g, box)  # fails closed -> raises
+        # auto-detect the y-axis scale from the calibrated range: a span > ~2
+        # means a percent axis (0-100), else a 0-1 proportion. (value_scale=None
+        # -> auto; the benchmark assuming 1.0 wrongly flattened 0-100% figures.)
+        if value_scale is None:
+            yspan = abs(y_fit.value(box.y0) - y_fit.value(box.y1))
+            vscale = 100.0 if yspan > 2.0 else 1.0
+        else:
+            vscale = value_scale
         cloud = column_curve_points(
             dark_curve_cloud(g, box, exclude_boxes=text_boxes), n_curves=2)
         t_, v_ = calibrate_points(cloud, x_fit, y_fit, monotone="none")
@@ -656,9 +748,9 @@ def pdf_raster_to_ipd(pdf_path: str, dpi: int = 200,
                 continue
             a = a[a[:, 0].argsort()]
             if value_is_cumulative_incidence:
-                surv = np.clip(1.0 - a[:, 1] / value_scale, 0.0, 1.0)
+                surv = np.clip(1.0 - a[:, 1] / vscale, 0.0, 1.0)
             else:
-                surv = np.clip(a[:, 1] / value_scale, 0.0, 1.0)
+                surv = np.clip(a[:, 1] / vscale, 0.0, 1.0)
             surv = np.minimum.accumulate(surv)  # KM survival is non-increasing
             tn = at_risk[i][0][1] if i < len(at_risk) and at_risk[i] else None
             et, ev = reconstruct_arm(a[:, 0], surv, total_n=tn)
