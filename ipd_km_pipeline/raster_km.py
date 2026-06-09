@@ -157,8 +157,19 @@ def detect_plot_boxes(
     two-panel cases the projection detector already nails. Boxes are returned
     left-to-right, top-to-bottom.
     """
-    projection = _detect_boxes_projection(gray, thresh=thresh, frac=frac, min_run=min_run)
-    morph = _detect_panels_morph(gray, thresh=max(thresh, 150))
+    H, W = gray.shape
+
+    def _plausible(boxes):
+        # a real KM panel is not tiny; reject boxes < 18% of the figure height
+        # or < 10% of its width (kills morph false-positives on body-text /
+        # decorative rules without dropping genuine grid panels, which are
+        # still ~25-45% of the figure each).
+        return [b for b in boxes
+                if (b.y1 - b.y0) >= 0.18 * H and (b.x1 - b.x0) >= 0.10 * W]
+
+    projection = _plausible(_detect_boxes_projection(
+        gray, thresh=thresh, frac=frac, min_run=min_run))
+    morph = _plausible(_detect_panels_morph(gray, thresh=max(thresh, 150)))
     return morph if len(morph) > len(projection) else projection
 
 
