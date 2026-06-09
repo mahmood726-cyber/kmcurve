@@ -87,6 +87,29 @@ def test_auto_detect_plot_box():
     assert abs(box.x1 - 350) <= 3 and abs(box.y0 - 20) <= 3
 
 
+def test_detect_plot_boxes_multi_panel():
+    """Two side-by-side axis frames must be detected as TWO panels (real KM
+    figures are often multi-panel; a merged box wrecks calibration)."""
+    H, W = 300, 620
+    img = np.full((H, W), 255, dtype=np.uint8)
+    for ax_x0, ax_x1 in [(50, 280), (340, 570)]:
+        img[20:261, ax_x0] = 0           # y-axis
+        img[260, ax_x0:ax_x1 + 1] = 0    # x-axis
+    boxes = R.detect_plot_boxes(img)
+    assert len(boxes) == 2
+    xs = sorted(b.x0 for b in boxes)
+    assert abs(xs[0] - 50) <= 3 and abs(xs[1] - 340) <= 3
+    for b in boxes:
+        assert abs(b.y1 - 260) <= 3      # x-axis at the y-axis bottom, not lower
+
+
+def test_detect_plot_boxes_single_panel():
+    img, _, _ = _make_axes_image()
+    boxes = R.detect_plot_boxes(img)
+    assert len(boxes) == 1
+    assert abs(boxes[0].x0 - 50) <= 3 and abs(boxes[0].y1 - 270) <= 3
+
+
 def test_auto_detect_ticks_and_calibrate():
     img, x_ticks, _ = _make_axes_image()
     box = R.detect_plot_box(img)

@@ -84,6 +84,87 @@ def detect_plot_box(gray: np.ndarray, thresh: int = 140, frac: float = 0.4) -> O
     return PlotBox(x0=x0, y0=y0, x1=x1, y1=y1)
 
 
+def _cluster_indices(idx, gap: int = 6):
+    """Cluster sorted indices that are within ``gap`` into mean positions."""
+    out = []
+    for i in idx:
+        if out and i - out[-1][-1] <= gap:
+            out[-1].append(int(i))
+        else:
+            out.append([int(i)])
+    return [int(np.mean(c)) for c in out]
+
+
+def detect_plot_boxes(
+    gray: np.ndarray, thresh: int = 140, frac: float = 0.35, min_run: float = 0.12,
+) -> List[PlotBox]:
+    """Detect MULTIPLE plot panels in a raster figure (1, 2 or 2x2 layouts).
+
+    Real KM figures are often multi-panel; a single merged box wrecks
+    calibration and arm separation. We (1) find the x-axis as the strong
+    horizontal row that the vertical axis lines actually meet (not e.g. an
+    at-risk-table separator), (2) split that row into horizontal RUNS -- one
+    per panel -- and (3) pair each run's left edge with its y-axis line.
+    Returns boxes left-to-right, top-to-bottom. Pure numpy.
+    """
+    dark = gray < thresh
+    H, W = dark.shape
+    col = dark.sum(axis=0)
+    vcols = _cluster_indices(np.where(col >= frac * H)[0])
+    if not vcols:
+        return []
+
+    def longest_run(mask, max_gap: int = 3):
+        """Longest (near-)contiguous True run -> (start, end) or None."""
+        best = cur_start = None
+        best_len = 0
+        i, n = 0, len(mask)
+        while i < n:
+            if mask[i]:
+                j = i
+                gap = 0
+                while j + 1 < n and (mask[j + 1] or gap < max_gap):
+                    gap = 0 if mask[j + 1] else gap + 1
+                    j += 1
+                # trim trailing gap
+                while j > i and not mask[j]:
+                    j -= 1
+                if j - i > best_len:
+                    best_len, best = j - i, (i, j)
+                i = j + 1
+            else:
+                i += 1
+        return best
+
+    boxes = []
+    for vx in vcols:
+        vxc = max(min(vx, W - 1), 0)
+        run = longest_run(dark[:, vxc])
+        if run is None:
+            continue
+        y0, vb = run  # y-axis line top..bottom (bottom may be a tick stub)
+        if vb - y0 < 0.2 * H:
+            continue
+        # x-axis = the row NEAR the y-axis bottom with the longest horizontal
+        # run from vx (tick marks at the y-axis column can extend the vertical
+        # past the true axis, so search a window rather than trust vb).
+        best_y1, best_x1, best_len = None, None, 0
+        for r in range(max(int(vb) - 12, 0), min(int(vb) + 5, H)):
+            rrun = longest_run(dark[r, vxc:])
+            if rrun is not None and rrun[1] > best_len:
+                best_len, best_y1, best_x1 = rrun[1], r, vxc + rrun[1]
+        if best_y1 is None or best_x1 - vx < min_run * W:
+            continue
+        boxes.append(PlotBox(x0=vx, y0=int(y0), x1=int(best_x1), y1=int(best_y1)))
+    # order left-to-right, top-to-bottom; de-dup near-identical frames
+    boxes.sort(key=lambda b: (round(b.y0 / 20), b.x0))
+    uniq = []
+    for b in boxes:
+        if not any(abs(b.x0 - u.x0) < 8 and abs(b.y1 - u.y1) < 8 for u in uniq):
+            uniq.append(b)
+    return uniq
+
+
 def detect_tick_positions(
     gray: np.ndarray, plot: PlotBox, axis: str = "x",
     thresh: int = 140, band: int = 8, min_gap: int = 4,
@@ -561,6 +642,31 @@ def pdf_raster_to_ipd(pdf_path: str, dpi: int = 200,
     from vector_km import separate_arms
     from guyot import reconstruct_arm
 
+    def _panel_to_ipd(g, box, text_boxes):
+        x_fit, y_fit = auto_calibrate_axes(g, box)  # fails closed -> raises
+        cloud = column_curve_points(
+            dark_curve_cloud(g, box, exclude_boxes=text_boxes), n_curves=2)
+        t_, v_ = calibrate_points(cloud, x_fit, y_fit, monotone="none")
+        gap = max(0.02 * (float(np.ptp(v_)) or 1.0), 1e-6)
+        arms = separate_arms(np.column_stack([t_, v_]), n_arms=2, gap=gap)
+        at_risk = extract_at_risk_raster(g, box)
+        out = []
+        for i, a in enumerate(arms):
+            if a.size == 0:
+                continue
+            a = a[a[:, 0].argsort()]
+            if value_is_cumulative_incidence:
+                surv = np.clip(1.0 - a[:, 1] / value_scale, 0.0, 1.0)
+            else:
+                surv = np.clip(a[:, 1] / value_scale, 0.0, 1.0)
+            surv = np.minimum.accumulate(surv)  # KM survival is non-increasing
+            tn = at_risk[i][0][1] if i < len(at_risk) and at_risk[i] else None
+            et, ev = reconstruct_arm(a[:, 0], surv, total_n=tn)
+            out.append({"label": f"arm{i}", "time": et, "event": ev,
+                        "n_events": int(ev.sum()), "final_survival": float(surv[-1]),
+                        "total_n": tn})
+        return out
+
     cands = _FL.locate_km_figures(pdf_path)
     if not cands:
         raise ValueError("no KM figure located")
@@ -570,33 +676,26 @@ def pdf_raster_to_ipd(pdf_path: str, dpi: int = 200,
     if c.bbox:
         x0, t, x1, b = c.bbox
         g = g[int(t * SC):int(b * SC), int(x0 * SC):int(x1 * SC)]
-    box = detect_plot_box(g)
-    if box is None:
+    panel_boxes = detect_plot_boxes(g)
+    if not panel_boxes:
+        single = detect_plot_box(g)
+        panel_boxes = [single] if single is not None else []
+    if not panel_boxes:
         raise ValueError("no plot box detected")
-    x_fit, y_fit = auto_calibrate_axes(g, box)  # fails closed
-    boxes = _rapidocr_text_boxes(g)
-    cloud = column_curve_points(dark_curve_cloud(g, box, exclude_boxes=boxes), n_curves=2)
-    t_, v_ = calibrate_points(cloud, x_fit, y_fit, monotone="none")
-    gap = max(0.02 * (float(np.ptp(v_)) or 1.0), 1e-6)
-    arms = separate_arms(np.column_stack([t_, v_]), n_arms=2, gap=gap)
-    at_risk = extract_at_risk_raster(g, box)
 
-    out = []
-    for i, a in enumerate(arms):
-        if a.size == 0:
-            continue
-        a = a[a[:, 0].argsort()]
-        if value_is_cumulative_incidence:
-            surv = np.clip(1.0 - a[:, 1] / value_scale, 0.0, 1.0)
-        else:
-            surv = np.clip(a[:, 1] / value_scale, 0.0, 1.0)
-        surv = np.minimum.accumulate(surv)  # KM survival is non-increasing
-        tn = at_risk[i][0][1] if i < len(at_risk) and at_risk[i] else None
-        et, ev = reconstruct_arm(a[:, 0], surv, total_n=tn)
-        out.append({"label": f"arm{i}", "time": et, "event": ev,
-                    "n_events": int(ev.sum()), "final_survival": float(surv[-1]),
-                    "total_n": tn})
-    return {"page": c.page_index, "kind": c.kind, "caption": c.caption, "arms": out}
+    text_boxes = _rapidocr_text_boxes(g)
+    panels = []
+    for box in panel_boxes:
+        try:
+            panels.append({"box": (box.x0, box.y0, box.x1, box.y1),
+                           "arms": _panel_to_ipd(g, box, text_boxes)})
+        except Exception as exc:
+            panels.append({"box": (box.x0, box.y0, box.x1, box.y1),
+                           "error": str(exc)[:70]})
+    # backward-compatible: surface the first panel that yielded arms
+    first = next((p["arms"] for p in panels if p.get("arms")), [])
+    return {"page": c.page_index, "kind": c.kind, "caption": c.caption,
+            "n_panels": len(panel_boxes), "panels": panels, "arms": first}
 
 
 def raster_to_ipd(
