@@ -294,10 +294,15 @@ def _rapidocr_numeric(image: np.ndarray):
     out = []
     for it in (res or []):
         box, txt = it[0], str(it[1]).strip()
-        if _re.fullmatch(r"\d{1,3}(?:\.\d+)?", txt):
-            cx = sum(p[0] for p in box) / 4.0
-            cy = sum(p[1] for p in box) / 4.0
-            out.append((cx, cy, float(txt)))
+        # extract the FIRST number embedded in the label ("Month 18" -> 18,
+        # "1.00-" -> 1.0). Skip labels with >1 number (e.g. a merged
+        # "Month 6Month 9Month 12" or an at-risk "46 (4)") -- ambiguous position.
+        nums = _re.findall(r"\d+(?:\.\d+)?", txt)
+        if len(nums) != 1:
+            continue
+        cx = sum(p[0] for p in box) / 4.0
+        cy = sum(p[1] for p in box) / 4.0
+        out.append((cx, cy, float(nums[0])))
     return out
 
 
@@ -347,8 +352,11 @@ def auto_calibrate_axes(
         # (A fraction of all candidates is too strict: stray numbers like at-risk
         # counts inflate the denominator. 4 collinear evenly-spaced round-valued
         # ticks is not a coincidence.) Otherwise fail closed to 2-click.
+        # >=4 inliers guards against spurious-collinear misreads; R^2>0.97
+        # tolerates real-world OCR position noise while still rejecting garbage
+        # fits (which score ~0.2-0.4).
         need = 4 if len(cands) >= 5 else 3
-        if n_in < need or fit.r2 < 0.99:
+        if n_in < need or fit.r2 < 0.97:
             raise ValueError(
                 f"auto-calibrate {name}: {n_in} ticks agree (R2={fit.r2:.3f}); "
                 "unreliable -- fall back to 2-click")
