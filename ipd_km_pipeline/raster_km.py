@@ -24,6 +24,7 @@ the identical IPD/HR output as the vector path.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -116,6 +117,160 @@ def detect_tick_positions(
         else:
             i += 1
     return peaks
+
+
+def _ensure_tesseract() -> bool:
+    """Point pytesseract at the tesseract binary if it isn't on PATH. Returns
+    True if OCR is usable."""
+    try:
+        import pytesseract
+    except Exception:
+        return False
+    import shutil
+
+    if shutil.which("tesseract"):
+        return True
+    for cand in (
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        r"C:\Users\mahmo\AppData\Local\Programs\Tesseract-OCR\tesseract.exe",
+    ):
+        if Path(cand).exists():
+            pytesseract.pytesseract.tesseract_cmd = cand
+            return True
+    return False
+
+
+def ocr_tick_values(
+    gray: np.ndarray, plot: PlotBox, positions: List[float], axis: str = "x",
+    label_band: int = 30, y_label_width: int = 52, upscale: int = 4, thresh: int = 140,
+) -> List[Optional[float]]:
+    """OCR the numeric label beside each detected tick (digits + decimal).
+
+    For each tick position, crop the label region (below the x-axis / left of
+    the y-axis), upscale + binarise, and OCR with a digit whitelist. Returns a
+    value per position (None where unreadable). This is the piece that makes
+    raster calibration fully automatic -- no human clicks.
+    """
+    import re as _re
+
+    if not _ensure_tesseract():
+        raise RuntimeError("tesseract not available; cannot OCR tick values")
+    import pytesseract
+
+    from PIL import Image
+
+    H, W = gray.shape
+    pos = sorted(positions)
+    half = (np.median(np.diff(pos)) / 2.0) if len(pos) > 1 else 12.0
+    whitelist = "-c tessedit_char_whitelist=0123456789."
+    out: List[Optional[float]] = []
+    for p in pos:
+        if axis == "x":
+            x0 = int(max(p - half, 0)); x1 = int(min(p + half, W))
+            y0 = plot.y1 + 2; y1 = min(plot.y1 + 2 + label_band, H)
+        else:  # y-axis labels: wide enough for multi-digit (100); clear the
+            # tick marks (which sit just left of the axis) from the right edge.
+            y0 = int(max(p - half, 0)); y1 = int(min(p + half, H))
+            x0 = max(plot.x0 - 8 - y_label_width, 0); x1 = max(plot.x0 - 8, 0)
+        crop = gray[y0:y1, x0:x1]
+        if crop.size == 0:
+            out.append(None); continue
+        # tight-crop to the dark glyph bounding box (+pad) so OCR sees a centred
+        # digit group rather than a small digit in a sea of white (which skews
+        # thresholding and wrecks recognition).
+        dmask = crop < thresh
+        if dmask.any():
+            rr = np.where(dmask.any(axis=1))[0]
+            cc = np.where(dmask.any(axis=0))[0]
+            r0, r1 = max(rr[0] - 2, 0), min(rr[-1] + 3, crop.shape[0])
+            c0, c1 = max(cc[0] - 2, 0), min(cc[-1] + 3, crop.shape[1])
+            crop = crop[r0:r1, c0:c1]
+        if crop.size == 0:
+            out.append(None); continue
+        # smooth (LANCZOS) upscale BEFORE binarising -> clean glyph edges; nearest
+        # upscaling leaves blocky digits that Tesseract misreads.
+        big = Image.fromarray(crop).resize(
+            (max(crop.shape[1] * upscale, 1), max(crop.shape[0] * upscale, 1)),
+            Image.LANCZOS)
+        a = np.asarray(big)
+        # per-crop adaptive (mean) threshold beats a fixed cut on anti-aliased
+        # upscaled glyphs (diagnosed: 7/8 vs 4/8 digit accuracy).
+        t = float(a.mean())
+        binimg = np.where(a < t, 0, 255).astype(np.uint8)
+        binimg = np.pad(binimg, 16, mode="constant", constant_values=255)  # quiet margin
+        val = None
+        for psm in (7, 8):  # text-line, then single-word
+            txt = pytesseract.image_to_string(
+                binimg, config=f"--psm {psm} {whitelist}").strip()
+            m = _re.search(r"\d+(?:\.\d+)?", txt)
+            if m:
+                val = float(m.group()); break
+        out.append(val)
+    return out
+
+
+def _ransac_axis_fit(pairs, tol: float):
+    """Robust line fit over (position, value) pairs, tolerant of OCR errors.
+
+    Tick positions are exact and evenly spaced and values are an arithmetic
+    sequence, so the true calibration line passes through MANY pairs while OCR
+    misreads scatter off it. We take the pair-defined line with the most
+    inliers (residual <= tol) and least-squares refit on those inliers.
+    Returns (AxisFit, n_inliers).
+    """
+    from vector_km import _fit_axis
+
+    best_inliers: List = []
+    n = len(pairs)
+    for i in range(n):
+        for j in range(i + 1, n):
+            (p1, v1), (p2, v2) = pairs[i], pairs[j]
+            if p1 == p2:
+                continue
+            m = (v2 - v1) / (p2 - p1)
+            b = v1 - m * p1
+            inliers = [(p, v) for p, v in pairs if abs(m * p + b - v) <= tol]
+            if len(inliers) > len(best_inliers):
+                best_inliers = inliers
+    # require >=3 consistent ticks (2 always fit a line perfectly -> degenerate);
+    # below that, auto-calibration is unreliable and the caller should fall back
+    # to 2-click. With <3 ticks total, all must agree.
+    need = 3 if len(pairs) >= 3 else len(pairs)
+    if len(best_inliers) < need:
+        raise ValueError(
+            f"robust fit: only {len(best_inliers)} consistent ticks (need {need}); "
+            "fall back to 2-click calibration")
+    return _fit_axis(best_inliers), len(best_inliers)
+
+
+def auto_calibrate_axis(gray: np.ndarray, plot: PlotBox, axis: str = "x",
+                        tol: Optional[float] = None, min_inlier_frac: float = 0.75):
+    """EXPERIMENTAL, fails closed: detect tick positions + OCR values -> AxisFit.
+
+    *** Tesseract OCR of small axis labels is NOT reliable *** (benchmarked at
+    ~15-60% per-digit accuracy, erratic across font sizes). It can even return
+    a confidently-wrong line from coincidentally-collinear misreads. So this
+    fails CLOSED: it requires a strong inlier majority (>= ``min_inlier_frac``
+    of OCR'd ticks AND >= 3) before trusting the fit, and otherwise RAISES so
+    the caller falls back to the reliable 2-click path (``auto_axis_fit`` with
+    detected positions + human/known values). Do not rely on this for
+    unattended calibration; verify the result against the curve.
+    """
+    positions = sorted(detect_tick_positions(gray, plot, axis=axis))
+    values = ocr_tick_values(gray, plot, positions, axis=axis)
+    pairs = [(p, v) for p, v in zip(positions, values) if v is not None]
+    if len(pairs) < 2:
+        raise ValueError(f"auto-calibration {axis}: only {len(pairs)} ticks OCR'd")
+    if tol is None:
+        vals = [v for _, v in pairs]
+        tol = max(2.0, 0.03 * (max(vals) - min(vals) or 1.0))
+    fit, n_in = _ransac_axis_fit(pairs, tol)
+    if n_in < max(3, int(np.ceil(min_inlier_frac * len(pairs)))):
+        raise ValueError(
+            f"auto-calibration {axis}: only {n_in}/{len(pairs)} OCR ticks agree "
+            "-- unreliable; fall back to 2-click")
+    return fit
 
 
 def auto_axis_fit(tick_positions: List[float], values: List[float]):
