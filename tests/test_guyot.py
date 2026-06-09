@@ -55,7 +55,11 @@ def test_pdf_to_ipd_advance_panelA():
     panels = vector_km.pdf_to_ipd(SAMPLE_PDF, FIGURE_PAGE)
     assert len(panels) == 4
     pa = panels[0]
-    assert pa.nar_mapping == "by_order_heuristic"
+    # arms are now paired to at-risk rows via the in-plot legend
+    assert pa.nar_mapping == "legend_matched"
+    # the Standard arm is paired with the "Standard" at-risk row, etc.
+    for a in pa.arms:
+        assert a.label.split()[0].lower() in a.nar_label.lower()
     # both at-risk rows recovered with the real ADVANCE totals (~5570)
     totals = sorted(int(r.counts[0]) for r in pa.at_risk)
     assert len(pa.at_risk) == 2
@@ -76,7 +80,8 @@ def test_reconstructed_ci_tracks_input_curve():
     """Reconstructed final cumulative incidence ~ the digitised curve endpoint."""
     km_panels = vector_km.extract_km_from_pdf(SAMPLE_PDF, FIGURE_PAGE, monotone="increasing")
     ipd_panels = vector_km.pdf_to_ipd(SAMPLE_PDF, FIGURE_PAGE)
-    arms_in = {a.label: a for a in km_panels[0].arms}
+    # IPD arms are labelled by legend identity; key the input curves the same way
+    arms_in = {(a.identity or a.label): a for a in km_panels[0].arms}
     for a in ipd_panels[0].arms:
         et, es = guyot.km_from_ipd(a.time, a.event)
         recon_ci = (1 - es[-1]) * 100 if es.size else 0.0

@@ -108,6 +108,7 @@ class Arm:
     label: str  # "upper" / "lower" (positional; map to treatment via legend)
     time: np.ndarray
     value: np.ndarray  # calibrated y in the panel's native y-units
+    identity: str = ""  # treatment name from the in-plot legend, if matched
 
     def n_points(self) -> int:
         return int(self.time.size)
@@ -119,6 +120,9 @@ class PanelResult:
     x_fit: AxisFit
     y_fit: AxisFit
     arms: List[Arm] = field(default_factory=list)
+    # fraction of timepoints where the arms are resolvably separated; low
+    # values flag near-overlapping same-colour curves whose split is unreliable
+    separation_confidence: float = 1.0
 
 
 # --------------------------------------------------------------------------- #
@@ -354,7 +358,11 @@ def extract_at_risk(
         label = ""
         for w in page.extract_words():
             wy = (w["top"] + w["bottom"]) / 2.0
-            if abs(wy - cy) < row_gap and w["x1"] <= panel.x0 - 1 and not _to_number(w["text"]):
+            if (
+                abs(wy - cy) < row_gap
+                and w["x1"] <= panel.x0 - 1
+                and not any(ch.isdigit() for ch in w["text"])
+            ):
                 label = (label + " " + w["text"]).strip()
         out.append(AtRiskRow(label=label, times=times, counts=vals))
     return out
@@ -464,6 +472,93 @@ def extract_panel_point_cloud(
     return np.array(cloud, dtype=float) if cloud else np.empty((0, 2))
 
 
+def extract_legend_labels(
+    page, panel: Panel, line_gap: float = 11.0
+) -> List[Tuple[str, float, float]]:
+    """Find in-plot legend labels as (text, x_center, y_center) in pixels.
+
+    Returns non-numeric word blocks inside the plot box, with p-values and the
+    rotated axis title (which sits at x > panel.x1) excluded. Vertically and
+    horizontally adjacent words are merged into one label (e.g. "Standard" +
+    "control" -> "Standard control").
+    """
+    cands = []
+    for w in page.extract_words():
+        cx = (w["x0"] + w["x1"]) / 2.0
+        cy = (w["top"] + w["bottom"]) / 2.0
+        if not (panel.x0 - 2 <= cx <= panel.x1 and panel.y_top - 2 <= cy <= panel.y_bottom + 2):
+            continue
+        txt = w["text"].strip()
+        if _to_number(txt) is not None or "=" in txt or len(txt) < 2:
+            continue
+        if not any(ch.isalpha() for ch in txt):
+            continue
+        cands.append({"t": txt, "x0": w["x0"], "x1": w["x1"], "cx": cx, "cy": cy})
+
+    # merge adjacent words (close in y, overlapping/!nearby in x) into labels
+    cands.sort(key=lambda c: (c["cy"], c["x0"]))
+    used = [False] * len(cands)
+    labels: List[Tuple[str, float, float]] = []
+    for i, c in enumerate(cands):
+        if used[i]:
+            continue
+        block = [c]
+        used[i] = True
+        for j in range(i + 1, len(cands)):
+            if used[j]:
+                continue
+            d = cands[j]
+            if abs(d["cy"] - block[-1]["cy"]) <= line_gap and not (
+                d["x1"] < min(b["x0"] for b in block) - 30
+                or d["x0"] > max(b["x1"] for b in block) + 30
+            ):
+                block.append(d)
+                used[j] = True
+        block.sort(key=lambda b: (round(b["cy"] / line_gap), b["x0"]))
+        text = " ".join(b["t"] for b in block)
+        cx = float(np.mean([b["cx"] for b in block]))
+        cy = float(np.mean([b["cy"] for b in block]))
+        labels.append((text, cx, cy))
+    return labels
+
+
+def assign_arm_identity(
+    page, panel: Panel, arms: List["Arm"], x_fit: AxisFit, y_fit: AxisFit
+) -> str:
+    """Match in-plot legend labels to arms by trajectory proximity.
+
+    For each label, the arm whose pixel-position at the label's time is nearest
+    the label is paired (optimal assignment). Sets ``arm.identity`` in place.
+    Returns the method used: "legend" if labels were matched, else "" (none).
+    """
+    labels = extract_legend_labels(page, panel)
+    live = [a for a in arms if a.n_points() > 0]
+    if not labels or not live or y_fit.slope == 0 or x_fit.slope == 0:
+        return ""
+
+    def arm_py_at(arm: "Arm", x_px: float) -> float:
+        t = x_fit.slope * x_px + x_fit.intercept
+        v = float(np.interp(t, arm.time, arm.value))
+        return (v - y_fit.intercept) / y_fit.slope  # value -> pixel y
+
+    # cost[label, arm] = vertical pixel distance from label to arm at label's x
+    cost = np.zeros((len(labels), len(live)))
+    for li, (_, lx, ly) in enumerate(labels):
+        for ai, arm in enumerate(live):
+            cost[li, ai] = abs(ly - arm_py_at(arm, lx))
+
+    try:
+        from scipy.optimize import linear_sum_assignment
+
+        rows, cols = linear_sum_assignment(cost)
+    except Exception:
+        rows = list(range(min(len(labels), len(live))))
+        cols = list(np.argmin(cost, axis=1)[: len(rows)])
+    for li, ai in zip(rows, cols):
+        live[ai].identity = labels[li][0]
+    return "legend"
+
+
 def _enforce_monotone(time: np.ndarray, value: np.ndarray, increasing: bool) -> np.ndarray:
     """Force a value series to be monotone in time (CI up, survival down)."""
     out = value.astype(float).copy()
@@ -486,6 +581,26 @@ def _decimate(time: np.ndarray, value: np.ndarray, eps: float) -> Tuple[np.ndarr
     return time[keep], value[keep]
 
 
+def _cluster_column(vals: np.ndarray, gap: float, n_arms: int) -> List[float]:
+    """Cluster a column's values into <= n_arms bands; return medians (desc)."""
+    vals = np.sort(vals)
+    groups: List[np.ndarray] = []
+    start = 0
+    for i in range(1, len(vals)):
+        if vals[i] - vals[i - 1] > gap:
+            groups.append(vals[start:i])
+            start = i
+    groups.append(vals[start:])
+    meds = [float(np.median(g)) for g in groups]
+    # merge closest adjacent bands until at most n_arms remain
+    while len(meds) > n_arms:
+        d = [meds[i + 1] - meds[i] for i in range(len(meds) - 1)]
+        j = int(np.argmin(d))
+        meds[j] = (meds[j] + meds[j + 1]) / 2.0
+        del meds[j + 1]
+    return sorted(meds, reverse=True)
+
+
 def separate_arms(
     points: np.ndarray,
     n_arms: int = 2,
@@ -494,38 +609,89 @@ def separate_arms(
 ) -> List[np.ndarray]:
     """Split a calibrated (time, value) cloud into ``n_arms`` traces.
 
-    ``points`` columns are (time, value) with value INCREASING upward. Per
-    time-column bin, points split into <= n_arms bands at the largest value-gap
-    exceeding ``gap``; bands are assigned by value order (highest value -> arm 0
-    "upper"). Where only one band exists (curves coincide, e.g. near t=0) all
-    arms share it. Returns a list of (M, 2) (time, value) arrays sorted by time.
+    ``points`` columns are (time, value). Per time-column bin, points are
+    clustered into <= n_arms bands. Bands are assigned to tracks by
+    VELOCITY-AWARE CONTINUITY: each band goes to the track whose *predicted*
+    next position (last value + last step) is nearest, via optimal assignment.
+    This follows each curve THROUGH a crossing, rather than producing upper/
+    lower envelopes (which is what naive vertical-order assignment yields and
+    is wrong whenever curves cross). Where a column has a single band (curves
+    coincident, e.g. near t=0) all tracks share it. Returns one (M, 2) array
+    per track, sorted by time. Track order is seeded highest-value-first, so
+    for non-crossing curves track 0 == "upper".
     """
     if points.size == 0:
         return [np.empty((0, 2)) for _ in range(n_arms)]
 
+    try:
+        from scipy.optimize import linear_sum_assignment
+    except Exception:  # pragma: no cover - scipy is a declared dep
+        linear_sum_assignment = None
+
     order = np.argsort(points[:, 0])
     points = points[order]
     col = np.round(points[:, 0] / col_dt) * col_dt
+    cols = np.unique(col)
+
     tracks: List[List[Tuple[float, float]]] = [[] for _ in range(n_arms)]
+    prev: Optional[List[float]] = None
+    vel = [0.0] * n_arms
 
-    for c in np.unique(col):
-        vals = np.sort(points[col == c, 1])[::-1]  # descending: highest first
-        if vals.size == 0:
+    for c in cols:
+        bands = _cluster_column(points[col == c, 1], gap, n_arms)
+        if not bands:
             continue
-        if vals.size >= 2 and n_arms >= 2:
-            diffs = -np.diff(vals)  # positive gaps going downward
-            gi = int(np.argmax(diffs))
-            if diffs[gi] > gap:
-                upper = vals[: gi + 1]
-                lower = vals[gi + 1 :]
-                tracks[0].append((c, float(np.median(upper))))
-                tracks[1].append((c, float(np.median(lower))))
-                continue
-        vm = float(np.median(vals))
-        for k in range(n_arms):
-            tracks[k].append((c, vm))
 
-    return [np.array(t, dtype=float) if t else np.empty((0, 2)) for t in tracks]
+        if prev is None:
+            if len(bands) == n_arms:
+                prev = list(bands)
+                for k in range(n_arms):
+                    tracks[k].append((c, bands[k]))
+            else:  # not yet separated -> coincident, all tracks share
+                vm = float(np.mean(bands))
+                for k in range(n_arms):
+                    tracks[k].append((c, vm))
+            continue
+
+        predicted = [prev[k] + vel[k] for k in range(n_arms)]
+
+        if len(bands) == 1:
+            # curves coincident here: every track gets the shared value, but
+            # velocity is FROZEN (momentum) so a true crossing is followed
+            # through once the bands separate again.
+            b = bands[0]
+            for k in range(n_arms):
+                prev[k] = b
+                tracks[k].append((c, b))
+            continue
+
+        # assign bands -> tracks minimising total |band - predicted| (optimal
+        # transport over positions). Carrying momentum lets this swap sides
+        # across a crossing instead of building upper/lower envelopes.
+        cost = np.abs(np.subtract.outer(np.array(bands), np.array(predicted)))
+        if linear_sum_assignment is not None:
+            rows, cidx = linear_sum_assignment(cost)
+        else:  # greedy fallback
+            rows, cidx, used = [], [], set()
+            for ri in range(len(bands)):
+                j = int(np.argmin([cost[ri, k] if k not in used else 1e18
+                                   for k in range(n_arms)]))
+                rows.append(ri); cidx.append(j); used.add(j)
+        assigned = {int(ci): bands[int(ri)] for ri, ci in zip(rows, cidx)}
+        for j in range(n_arms):
+            if j in assigned:
+                vel[j] = assigned[j] - prev[j]
+                prev[j] = assigned[j]
+                tracks[j].append((c, assigned[j]))
+            else:  # unmatched track carries its position, keeps momentum
+                tracks[j].append((c, prev[j]))
+
+    arrays = [np.array(t, dtype=float) if t else np.empty((0, 2)) for t in tracks]
+    # Stable labelling: order tracks by mean value (desc) so track 0 == "upper"
+    # for the common non-crossing case. Genuine crossings need legend identity
+    # (see assign_arm_identity); this is only the positional default.
+    arrays.sort(key=lambda a: -(a[:, 1].mean() if a.size else -np.inf))
+    return arrays
 
 
 # --------------------------------------------------------------------------- #
@@ -593,6 +759,23 @@ def extract_km_from_pdf(
 
             arm_clouds = separate_arms(cal, n_arms=n_arms)
 
+            # separation confidence: fraction of (aligned) columns where the two
+            # arms differ by more than ~2% of the value range. Low => arms
+            # near-overlapping and the split is unreliable.
+            sep_conf = 1.0
+            sep_thresh = max(margin_v, 1e-9)
+            if (
+                len(arm_clouds) >= 2
+                and arm_clouds[0].size
+                and arm_clouds[1].size
+                and len(arm_clouds[0]) == len(arm_clouds[1])
+            ):
+                sep_conf = float(
+                    np.mean(
+                        np.abs(arm_clouds[0][:, 1] - arm_clouds[1][:, 1]) > sep_thresh
+                    )
+                )
+
             arms: List[Arm] = []
             for i, ac in enumerate(arm_clouds):
                 if ac.size == 0:
@@ -614,7 +797,18 @@ def extract_km_from_pdf(
                     tt, vv = _decimate(tt, vv, decimate_eps)
                 arms.append(Arm(label=labels[i], time=tt, value=vv))
 
-            results.append(PanelResult(panel=panel, x_fit=x_fit, y_fit=y_fit, arms=arms))
+            # resolve treatment identity from the in-plot legend (vector text)
+            assign_arm_identity(page, panel, arms, x_fit, y_fit)
+
+            results.append(
+                PanelResult(
+                    panel=panel,
+                    x_fit=x_fit,
+                    y_fit=y_fit,
+                    arms=arms,
+                    separation_confidence=sep_conf,
+                )
+            )
     return results
 
 
@@ -682,6 +876,29 @@ def pdf_to_ipd(
             if not arms:
                 continue
 
+            # pair each arm to an at-risk row: prefer legend-identity token
+            # overlap (e.g. arm "Standard control" <-> row "Standard"); fall
+            # back to positional order when identity is unavailable.
+            row_for_arm, used, by_legend = {}, set(), True
+            for i, arm in enumerate(arms):
+                toks = set(arm.identity.lower().split())
+                best, best_ov = None, 0
+                for ri, r in enumerate(at_risk):
+                    if ri in used:
+                        continue
+                    ov = len(toks & set(r.label.lower().split()))
+                    if ov > best_ov:
+                        best, best_ov = ri, ov
+                if best is not None and best_ov > 0:
+                    row_for_arm[i] = best
+                    used.add(best)
+                else:
+                    by_legend = False
+            if not by_legend or len(row_for_arm) < len(arms):
+                # incomplete legend match -> positional fallback for everyone
+                row_for_arm = {i: i for i in range(len(arms))}
+                by_legend = False
+
             arm_ipds: List[ArmIPD] = []
             for i, arm in enumerate(arms):
                 if arm.n_points() == 0:
@@ -692,7 +909,8 @@ def pdf_to_ipd(
                     surv = arm.value / value_scale
                 surv = np.clip(surv, 0.0, 1.0)
 
-                row = at_risk[i] if i < len(at_risk) else None
+                ri = row_for_arm.get(i)
+                row = at_risk[ri] if ri is not None and ri < len(at_risk) else None
                 nar_t = row.times if row is not None else None
                 nar_v = row.counts if row is not None else None
                 total_n = int(row.counts[0]) if row is not None else None
@@ -703,7 +921,7 @@ def pdf_to_ipd(
                 )
                 arm_ipds.append(
                     ArmIPD(
-                        label=arm.label,
+                        label=arm.identity or arm.label,
                         time=t,
                         event=e,
                         total_n=int(t.size),
@@ -716,7 +934,7 @@ def pdf_to_ipd(
                     panel_index=panel.index,
                     arms=arm_ipds,
                     at_risk=at_risk,
-                    nar_mapping="by_order_heuristic",
+                    nar_mapping="legend_matched" if by_legend else "by_order_heuristic",
                 )
             )
     return out

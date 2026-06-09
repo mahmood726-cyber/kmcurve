@@ -127,6 +127,7 @@ def reconstruct_ipd_guyot(
         n_at_risk = np.maximum((survivals * total_n).astype(int), 1)
 
     ipd: List[IPDRecord] = []
+    event_carry = 0.0  # fractional-event accumulator (error diffusion)
     for i in range(1, len(times)):
         s_prev, s_curr = survivals[i - 1], survivals[i]
         n_prev = n_at_risk[i - 1]
@@ -137,7 +138,12 @@ def reconstruct_ipd_guyot(
             continue
 
         cond_prob = 1 - (s_curr / s_prev)
-        n_events = int(np.round(n_prev * cond_prob))
+        # Carry the fractional part of the expected events between intervals so
+        # the cumulative event count tracks the curve without per-interval
+        # rounding bias (which otherwise drifts the reconstructed KM upward).
+        event_carry += n_prev * cond_prob
+        n_events = int(np.floor(event_carry))
+        event_carry -= n_events
         n_events = max(0, min(n_events, n_prev - 1))
 
         n_censored = max(0, n_prev - n_curr - n_events)
@@ -187,6 +193,37 @@ def km_from_ipd(time: np.ndarray, event: np.ndarray) -> Tuple[np.ndarray, np.nda
             s *= 1 - d / n_risk
         surv.append(s)
     return uniq, np.array(surv)
+
+
+def logrank_hr(
+    t1: np.ndarray,
+    e1: np.ndarray,
+    t0: np.ndarray,
+    e0: np.ndarray,
+) -> dict:
+    """Log-rank-based hazard ratio (arm1 vs arm0) and chi-square test.
+
+    Uses the Mantel-Haenszel O-E/V estimator: HR = exp((O1 - E1) / V). Returns
+    {'hr', 'logrank_chi2', 'o1', 'e1', 'v'}. This is the standard summary HR
+    from reconstructed IPD; for crossing hazards a single HR is not meaningful.
+    """
+    t1 = np.asarray(t1, float); e1 = np.asarray(e1, int)
+    t0 = np.asarray(t0, float); e0 = np.asarray(e0, int)
+    event_times = np.unique(np.concatenate([t1[e1 == 1], t0[e0 == 1]]))
+    o1 = e_1 = v = 0.0
+    for t in event_times:
+        n1 = int(np.sum(t1 >= t)); n0 = int(np.sum(t0 >= t))
+        d1 = int(np.sum((t1 == t) & (e1 == 1)))
+        d0 = int(np.sum((t0 == t) & (e0 == 1)))
+        n = n1 + n0; d = d1 + d0
+        if n < 2 or d == 0:
+            continue
+        o1 += d1
+        e_1 += d * n1 / n
+        v += d * (n1 * n0) * (n - d) / (n * n * (n - 1))
+    hr = float(np.exp((o1 - e_1) / v)) if v > 0 else float("nan")
+    chi2 = float((o1 - e_1) ** 2 / v) if v > 0 else float("nan")
+    return {"hr": hr, "logrank_chi2": chi2, "o1": o1, "e1": e_1, "v": v}
 
 
 def reconstruct_arm(
