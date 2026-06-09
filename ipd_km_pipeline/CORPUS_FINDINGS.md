@@ -136,6 +136,23 @@ robustness (5/18 fail closed -- the 2-click fallback rescues these). Event
 accuracy where it succeeds AND has ground truth is perfect (0 error). This is
 the measured target list for the next round of raster hardening.
 
+### Update: multi-panel detection added (`detect_plot_boxes`)
+
+Real KM figures are often multi-panel (A/B side-by-side); the old single-box
+detector merged panels -> flat [0,0]. `detect_plot_boxes` now finds each panel
+and `pdf_raster_to_ipd` processes them independently (failing closed per
+panel). Re-run taxonomy: success 1->2 (fonc.1807364, a 2-panel figure, now
+extracts; events [9,8]), extract_suspect 2->1. calib_fallback folded into
+extract_fail (now 12) because per-panel calibration fails closed *inside*
+pdf_raster_to_ipd instead of raising -- so **curve-pixel extraction + arm
+separation is now unambiguously THE dominant gap (13/18)**. Marginal
+end-to-end gain (1->2 true success), but multi-panel is necessary
+infrastructure and clarifies the next target: robust curve extraction on real
+figures (thin/grey/coloured/dashed arms, censoring marks, near-overlapping
+high-survival curves). NB the benchmark no longer separates "calibration
+failed" from "extraction failed" -- an instrumentation gap to close (inspect
+per-panel errors) next.
+
 ## Revised Phase-1 priority (data-driven)
 
 1. **Raster fallback, properly built** — CV curve extraction (already partly in
