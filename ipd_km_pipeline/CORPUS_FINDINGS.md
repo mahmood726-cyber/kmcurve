@@ -29,15 +29,37 @@ raster when it is not.
 - Secondary gap: panel detection requires a full axis-frame rectangle; the one
   vector PDF that failed (`vector_no_panel`) likely uses tick-only axes.
 
-## Important caveat: acquisition source is a confound
+## Source-diverse scan (update 2026-06-09): raster dominates ALL OA sources
 
-"~89% raster" is specific to **Europe-PMC rendered** PDFs. Vector availability
-depends heavily on source:
-- Publisher PDFs (via DOI / Unpaywall) and bioRxiv/medRxiv PDFs are far more
-  likely to be vector.
-- A proper characterisation must scan multiple sources and report
-  vector-availability per source. This is an explicit Phase-1 task, not a
-  settled number.
+We tested the "acquisition source is a confound" hypothesis directly by adding
+publisher-OA (Unpaywall) and preprint (bioRxiv) fetchers.
+
+| source | n | raster_figure | extracted |
+|---|---|---|---|
+| Europe-PMC rendered | 9 | 8 | 0 |
+| Publisher OA (Unpaywall) | 9 | 9 | 0 |
+| bioRxiv/medRxiv | 0 | — | — (acquisition blocked) |
+| **combined OA** | **18** | **17** | **0** |
+
+**The hypothesis was wrong in the optimistic direction.** Publisher OA PDFs
+(mostly Frontiers / open-access mega-journals here) rasterise figures just as
+PMC-rendered ones do — 17/18 real OA PDFs are raster, 0 vector-extractable.
+The vector path works on a *specific premium subset* (e.g. NEJM/ADVANCE), not
+on typical OA literature. bioRxiv could not be fetched (Europe PMC PPR results
+were mostly Preprints.org/ResearchSquare, and bioRxiv blocks direct
+`.full.pdf` bot access) — preprint acquisition needs a dedicated approach.
+
+Caveat the other way: the Unpaywall sample skewed to Frontiers journals (known
+rasterisers); a journal-stratified sample would refine the exact rate. But the
+direction is unambiguous across 18 PDFs and two acquisition methods.
+
+**Conclusion: the raster path is not a fallback — for OA coverage it is the
+primary path.** Built in `raster_km.py`: render → dark-curve pixel cloud →
+(reuses) 2-click calibration + continuity arm separation + Guyot. Validated
+end-to-end on a synthetic 2-curve image (recovers drawn survival within 0.05).
+The remaining hard part is automating calibration on raster (tick OCR) so it
+needs no human clicks — that is the legacy 0%-OCR problem and the key open
+research item.
 
 ## Revised Phase-1 priority (data-driven)
 

@@ -50,3 +50,5 @@ logs/
 # downloaded corpus PDFs (license/size; reproducible from manifest)
 corpus/*.pdf
 corpus/scan_report.json
+corpus_*/*.pdf
+corpus_*/*.json

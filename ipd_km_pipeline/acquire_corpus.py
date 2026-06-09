@@ -56,6 +56,127 @@ def fetch_pdf(pmcid: str, dest: Path) -> Optional[Path]:
     return out
 
 
+EPMC_SEARCH = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+UNPAYWALL = "https://api.unpaywall.org/v2/{doi}?email={email}"
+
+
+def epmc_search(query: str, n: int) -> List[dict]:
+    """Europe PMC REST search -> list of {id, source, doi, pdf_urls}."""
+    from urllib.parse import quote
+
+    url = (f"{EPMC_SEARCH}?query={quote(query)}&format=json"
+           f"&pageSize={min(n, 100)}&resultType=core")
+    data = json.loads(_get(url))
+    out = []
+    for r in data.get("resultList", {}).get("result", []):
+        pdfs = [u.get("url") for u in r.get("fullTextUrlList", {}).get("fullTextUrl", [])
+                if u.get("documentStyle") == "pdf"]
+        out.append({"id": r.get("id"), "source": r.get("source"),
+                    "doi": r.get("doi", ""), "pdf_urls": pdfs})
+    return out
+
+
+def _save_pdf_bytes(data: bytes, out: Path) -> Optional[Path]:
+    if not data[:5].startswith(b"%PDF"):
+        return None
+    out.write_bytes(data)
+    return out
+
+
+def acquire_unpaywall(query: str, n: int, out_dir: Path,
+                      email: str = "research@example.org", sleep: float = 0.34) -> dict:
+    """Publisher OA PDFs via Unpaywall (DOIs from a Europe PMC MED search).
+
+    Tests whether PUBLISHER PDFs preserve vector figures (unlike PMC-rendered).
+    Publisher servers often block bot PDF access, so yield can be low -- that
+    is reported honestly, not hidden.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = out_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"pdfs": []}
+    have = {e.get("doi") for e in manifest["pdfs"]}
+
+    hits = epmc_search(f"{query} AND SRC:MED", n * 6)
+    got, skipped = 0, {"no_doi": 0, "not_oa": 0, "blocked": 0, "dup": 0, "error": 0}
+    for h in hits:
+        if got >= n:
+            break
+        doi = h["doi"]
+        if not doi:
+            skipped["no_doi"] += 1
+            continue
+        if doi in have:
+            skipped["dup"] += 1
+            continue
+        try:
+            uw = json.loads(_get(UNPAYWALL.format(doi=doi, email=email)))
+            time.sleep(sleep)
+            loc = uw.get("best_oa_location") or {}
+            pdf_url = loc.get("url_for_pdf")
+            if not pdf_url:
+                skipped["not_oa"] += 1
+                continue
+            safe = doi.replace("/", "_")
+            pdf = _save_pdf_bytes(_get(pdf_url, timeout=60), out_dir / f"{safe}.pdf")
+            time.sleep(sleep)
+            if pdf is None:
+                skipped["blocked"] += 1
+                continue
+            manifest["pdfs"].append({"doi": doi, "pdf": pdf.name, "source": "unpaywall"})
+            got += 1
+            print(f"  [{got}/{n}] {doi}  {pdf.stat().st_size // 1024} KB")
+        except Exception as exc:
+            skipped["error"] += 1
+            print(f"  skip {doi}: {type(exc).__name__}")
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+    print(f"\nunpaywall: acquired {got} (total {len(manifest['pdfs'])}); skipped {skipped}")
+    return manifest
+
+
+def acquire_biorxiv(query: str, n: int, out_dir: Path, sleep: float = 0.34) -> dict:
+    """bioRxiv/medRxiv preprint PDFs (DOI prefix 10.1101) via Europe PMC + the
+    predictable .full.pdf URL. Preprints usually keep vector figures."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = out_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"pdfs": []}
+    have = {e.get("doi") for e in manifest["pdfs"]}
+
+    hits = epmc_search(f"{query} AND SRC:PPR", n * 8)
+    got, skipped = 0, {"not_biorxiv": 0, "blocked": 0, "dup": 0, "error": 0}
+    for h in hits:
+        if got >= n:
+            break
+        doi = h["doi"]
+        if not doi.startswith("10.1101/"):  # bioRxiv/medRxiv prefix
+            skipped["not_biorxiv"] += 1
+            continue
+        if doi in have:
+            skipped["dup"] += 1
+            continue
+        try:
+            server = "biorxiv"  # medRxiv shares the URL scheme; try biorxiv host
+            url = f"https://www.{server}.org/content/{doi}v1.full.pdf"
+            safe = doi.replace("/", "_")
+            pdf = _save_pdf_bytes(_get(url, timeout=60), out_dir / f"{safe}.pdf")
+            time.sleep(sleep)
+            if pdf is None:
+                pdf = _save_pdf_bytes(_get(f"https://www.medrxiv.org/content/{doi}v1.full.pdf",
+                                           timeout=60), out_dir / f"{safe}.pdf")
+                time.sleep(sleep)
+            if pdf is None:
+                skipped["blocked"] += 1
+                continue
+            manifest["pdfs"].append({"doi": doi, "pdf": pdf.name, "source": "biorxiv"})
+            got += 1
+            print(f"  [{got}/{n}] {doi}  {pdf.stat().st_size // 1024} KB")
+        except Exception as exc:
+            skipped["error"] += 1
+            print(f"  skip {doi}: {type(exc).__name__}")
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+    print(f"\nbiorxiv: acquired {got} (total {len(manifest['pdfs'])}); skipped {skipped}")
+    return manifest
+
+
 def acquire(query: str, n: int, out_dir: Path, sleep: float = 0.34) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = out_dir / "manifest.json"
@@ -90,8 +211,17 @@ def acquire(query: str, n: int, out_dir: Path, sleep: float = 0.34) -> dict:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, default=30)
+    ap.add_argument("--source", choices=["pmc", "unpaywall", "biorxiv"], default="pmc")
     ap.add_argument("--query", default=DEFAULT_QUERY)
-    ap.add_argument("--out", default=str(Path(__file__).resolve().parent / "corpus"))
+    ap.add_argument("--email", default="research@example.org")
+    ap.add_argument("--out", default=None)
     args = ap.parse_args()
-    print(f"Acquiring up to {args.n} OA KM PDFs -> {args.out}")
-    acquire(args.query, args.n, Path(args.out))
+    base = Path(__file__).resolve().parent
+    out = Path(args.out) if args.out else base / f"corpus_{args.source}"
+    print(f"Acquiring up to {args.n} {args.source} KM PDFs -> {out}")
+    if args.source == "pmc":
+        acquire(args.query, args.n, out)
+    elif args.source == "unpaywall":
+        acquire_unpaywall(args.query, args.n, out, email=args.email)
+    elif args.source == "biorxiv":
+        acquire_biorxiv(args.query, args.n, out)
