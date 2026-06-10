@@ -542,5 +542,23 @@ and kmcurve-only **26/42** (median ratio 1.035; CIs overlap → favorable, not
 significant at n=42). The exact curve cures kmcurve's pixel noise; the at-risk
 table cures registry-ipd's missing censoring — fusion is strictly ≥ either alone.
 Full write-up: `registry-ipd/FUSION.md` + `validate/nar_fusion_results.json`.
-**Next:** demonstrate on a real matched AACT-trial ↔ published-PDF pair (this
-establishes the mechanism + expected gain on the gold standard).
+
+**Real-trial demonstration (`fusion_real_trial.py`) — RADIANT-4 (NCT01524783),
+validated vs the PUBLISHED HR.** registry-ipd's harvested AACT record gives the
+exact posted KM anchors + N=205/97; the figure's "N (events)" totals (107/77, what
+`at_risk_reported_events` OCRs) supply the censoring AACT lacks; the posted Cox HR
+**0.48 (95% CI 0.35–0.67)** is held-out ground truth:
+
+| reconstruction | HR | fold vs posted | inside posted CI? |
+|---|---:|---:|:--:|
+| registry-only (anchors, NO censoring) | 0.83 | 1.73 | no |
+| **FUSION (anchors + figure events)** | **0.56** | **1.17** | **yes** |
+
+On a real trial with a real posted effect, registry-only falls OUTSIDE the
+published CI (the trap) and the figure's event count pulls fusion INSIDE it —
+the same worked example registry-ipd's VALIDATION.md documents (curve-only 0.68 →
+censoring-informed 0.47 vs posted 0.48), now as a union of both projects' real
+data. (Honest link: events taken from the AACT harvest; kmcurve OCRs the identical
+"N (events)" totals from the figure in production. The RADIANT-4 Lancet primary
+isn't OA here, so the figure-OCR step is exercised separately by the corpus
+benchmark.) +1 test (`test_fusion_real_trial.py`).
