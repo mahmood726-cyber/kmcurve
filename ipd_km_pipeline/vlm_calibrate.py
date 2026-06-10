@@ -192,6 +192,33 @@ def build_packet(gray: np.ndarray, plot, out_dir: Optional[str] = None) -> Dict[
 # --------------------------------------------------------------------------- #
 # Pair VLM values with CV positions and fit (the shared ingest core)
 # --------------------------------------------------------------------------- #
+def _merge_split_peaks(positions: List[float], min_gap_frac: float = 0.4) -> List[float]:
+    """Merge tick peaks that sit closer than ``min_gap_frac`` x median spacing.
+
+    A single rendered tick mark sometimes splits into two adjacent CV peaks
+    (anti-aliasing + the small min_gap in detect_tick_positions), which inflates
+    the tick COUNT and breaks the count-match against the VLM read. Peaks 6px
+    apart when the real tick spacing is ~60px are unambiguously one tick, so we
+    collapse each run of near-peaks to its centroid. This is geometric and safe
+    (it never invents or drops a real tick); genuine under-detection (a missing
+    tick) is left alone, so it still fails closed at the count-match gate.
+    """
+    pos = sorted(positions)
+    if len(pos) < 3:
+        return pos
+    med = float(np.median(np.diff(pos)))
+    if med <= 0:
+        return pos
+    thr = min_gap_frac * med
+    groups: List[List[float]] = [[pos[0]]]
+    for p in pos[1:]:
+        if p - groups[-1][-1] < thr:
+            groups[-1].append(p)
+        else:
+            groups.append([p])
+    return [sum(g) / len(g) for g in groups]
+
+
 def _pair_and_fit(
     positions: List[float], values: List[float], axis: str, min_r2: float = 0.99
 ) -> AxisFit:
@@ -253,8 +280,10 @@ def ingest_vlm_answer(
     x_vals = _axis_values(xa, "x")
     y_vals = _axis_values(ya, "y")
 
-    x_pos = sorted(detect_tick_positions(gray, plot, "x"))
-    y_pos = sorted(detect_tick_positions(gray, plot, "y"))
+    # merge split peaks (one tick read as two adjacent peaks) before pairing;
+    # genuine missing ticks are NOT invented, so under-detection still fails closed.
+    x_pos = _merge_split_peaks(sorted(detect_tick_positions(gray, plot, "x")))
+    y_pos = _merge_split_peaks(sorted(detect_tick_positions(gray, plot, "y")))
 
     x_fit = _pair_and_fit(x_pos, x_vals, "x", min_r2)
     y_fit = _pair_and_fit(y_pos, y_vals, "y", min_r2)

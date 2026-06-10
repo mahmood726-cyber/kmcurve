@@ -234,18 +234,25 @@ VLM reads per crop, accept only on agreement; `eval_vlm_calibration.py`):
 | boxes | 22 |
 | both-reader agreement (verify gate) | 11/22 |
 | OCR `auto_calibrate_axes` calibrates | 8/22 |
-| VLM calibrates | 4/22 |
-| **VLM rescues (OCR fail → VLM ok)** | **3** (R²=1.0000 each) |
-| **combined OCR ∪ VLM** | **11/22 vs 8/22 OCR-alone (+37%)** |
+| VLM calibrates (after split-peak merge) | 5/22 |
+| **VLM rescues (OCR fail → VLM ok)** | **4** (R²≥0.9999 each) |
+| **combined OCR ∪ VLM** | **12/22 vs 8/22 OCR-alone (+50%)** |
+
+(Pre-merge: VLM 4/22, 3 rescues. The `_merge_split_peaks` post-process —
+collapsing a single tick that split into two adjacent CV peaks — added `bctt`
+box0 (11→6 X, 7→5 Y ticks). It never invents a missing tick, so genuine
+under-detection still fails closed.)
 
 **Findings:**
-- **Reading is solved.** Every verified VLM read was correct (R²=1.0000 on all 4
-  fits + 3 rescues). The VLM trivially reads label classes that defeat OCR —
+- **Reading is solved.** Every verified VLM read was correct (R²≥0.9999 on all 5
+  fits). The VLM trivially reads label classes that defeat OCR —
   `Baseline / Month 6 / Month 9 …` and `2.5, 7.5, 12.5`.
 - **The bottleneck moved** from "OCR can't read tick labels" to **CV tick-count
-  vs labelled-tick-count mismatch**: minor ticks make CV over-count (e.g. 11 CV
-  ticks vs 6 labels), faint ticks make it under-count (4 vs 5). The `bctt`
-  cluster fails here even though the VLM read perfectly.
+  vs labelled-tick-count mismatch**, of two kinds: (a) one tick split into two
+  adjacent CV peaks — over-count, now FIXED by `_merge_split_peaks`; (b) a
+  faint/extreme tick missed — under-count (4 vs 5), the residual `bctt` cluster,
+  which is genuinely ambiguous (which end is missing flips the calibration) and
+  correctly stays fail-closed.
 - **Count-mismatch must fail closed — it is NOT safe to guess.** Because tick
   values are arithmetic and positions evenly spaced, *both sequences are linear
   in index*, so ANY even decimation/alignment fits with R²=1. R² cannot
@@ -255,7 +262,11 @@ VLM reads per crop, accept only on agreement; `eval_vlm_calibration.py`):
   fails some boxes OCR handles. The right production posture is the wired
   fallback (OCR first, VLM on OCR-failure), which is what shipped.
 
-**Next for lever 1 (well-scoped):** make `detect_tick_positions` isolate MAJOR
-(labelled) ticks — by tick LENGTH (major ticks are drawn longer) and/or
-proximity to a detected label glyph — so the CV count matches the VLM read count.
-That converts the count-mismatch cluster without any unsafe alignment guessing.
+**Next for lever 1 (well-scoped):** the residual failures are all under-detection
+(a missing extreme/faint tick → CV count < VLM count). Recovering the missing
+tick safely needs an unambiguous anchor (e.g. plot-frame edge ↔ extreme labelled
+value) — but the pilot showed the detected ticks do NOT reliably sit at the box
+edges, so naive edge-anchoring is unsafe. Treat this as a hard floor unless a
+geometric anchor can be made unambiguous; do NOT relax the count-match gate
+(linear degeneracy → silent miscalibration). Higher-recall tick detection
+(lower projection threshold with a spurious-peak guard) is the safer lever.
