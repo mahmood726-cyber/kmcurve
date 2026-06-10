@@ -264,7 +264,8 @@ def _axis_values(answer_axis: Dict[str, Any], axis: str) -> List[float]:
 
 
 def ingest_vlm_answer(
-    gray: np.ndarray, plot, answer: Dict[str, Any], min_r2: float = 0.99
+    gray: np.ndarray, plot, answer: Dict[str, Any], min_r2: float = 0.99,
+    verify_agree: Optional[bool] = None,
 ) -> Tuple[AxisFit, AxisFit, Dict[str, Any]]:
     """Pair a structured VLM answer with classical-CV tick positions and fit.
 
@@ -296,7 +297,14 @@ def ingest_vlm_answer(
         "value_scale": 100.0 if ya.get("is_percent") else 1.0,
         "x_ticks": len(x_vals),
         "y_ticks": len(y_vals),
+        "x_value_min": min(x_vals), "x_value_max": max(x_vals),
+        "y_value_min": min(y_vals), "y_value_max": max(y_vals),
     }
+    # lever 4: confidence that PREDICTS correctness (not just R^2), for the
+    # auto-accept-vs-human-flag gate. verify_agree comes from the double-read.
+    from confidence import calibration_confidence
+    meta["confidence"] = calibration_confidence(
+        meta, x_fit.r2, y_fit.r2, len(x_vals), len(y_vals), verify_agree=verify_agree)
     return x_fit, y_fit, meta
 
 
@@ -353,6 +361,7 @@ def vlm_calibrate_axes(
     answer: Optional[Dict[str, Any]] = None,
     model: str = DEFAULT_MODEL,
     min_r2: float = 0.99,
+    verify_agree: Optional[bool] = None,
 ) -> Tuple[AxisFit, AxisFit]:
     """Drop-in companion to ``raster_km.auto_calibrate_axes`` -> ``(x_fit, y_fit)``.
 
@@ -362,7 +371,7 @@ def vlm_calibrate_axes(
     use ``calibrate_via_api`` / ``ingest_vlm_answer`` when you want the meta.
     """
     if answer is not None:
-        x_fit, y_fit, _ = ingest_vlm_answer(gray, plot, answer, min_r2)
+        x_fit, y_fit, _ = ingest_vlm_answer(gray, plot, answer, min_r2, verify_agree)
     else:
         x_fit, y_fit, _ = calibrate_via_api(gray, plot, model, min_r2)
     return x_fit, y_fit
