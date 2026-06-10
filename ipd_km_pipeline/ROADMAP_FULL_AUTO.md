@@ -55,6 +55,20 @@ flips circrep's reconstructed events).
    arm count, and (where reported) per-arm events/HR. This is the gating
    resource for everything else.
 
+   **STATUS (2026-06-10): labelling MACHINE shipped; corpus growth network-gated.**
+   `autolabel.py` (LABEL_SCHEMA + order-invariant `compare_labels` + confidence
+   gate) + `render_figures.py` + `build_corpus.py`; 9/9 tests. Instead of
+   hand-labelling, a VLM double-reads structured labels and a confidence gate
+   auto-accepts vs flags-for-human. Seed corpus: 15 figs -> 8 KM (18 panels) +
+   7 non-KM (locator FPs); 15/15 auto-accepted at mean conf 1.000; PMC2247136
+   (4 panels, 2/4/2/4 arms) independently verified correct. BLOCKERS: (a)
+   acquisition is network-blocked here (`getaddrinfo failed`, 200/200) -- wired,
+   grows when networked; (b) **locator precision is the yield ceiling** (7/15
+   located non-KM regions) -> improving `figure_locator` is the top next step;
+   (c) lever 3 needs PIXEL MASKS not structured labels -> bridge = weak-label
+   from CV extraction on auto-accepted figures (self-distillation). See
+   CORPUS_FINDINGS.md -> "Labelled corpus via confidence-gated auto-labelling".
+
 3. **ML curve segmentation** (small U-Net) for color/dashed/overlapping arms +
    censoring marks + CI bands -- robust where the current pixel heuristics are
    fragile (the circrep 2px-flip problem). Trains on lever 2's corpus.

@@ -346,3 +346,46 @@ accuracy > 0.9), and skips cleanly if torch is absent. A production model needs
 the **labelled corpus (lever 2)** — that is the hard gate. The synthetic
 generator doubles as a pre-training bootstrap until real labels exist.
 torch (CPU) is the only new dependency.
+
+## Labelled corpus via confidence-gated auto-labelling (lever 2) — 2026-06-10
+
+Hand-labelling 200-1000 figures is intractable, so lever 2 reuses the levers-1/4
+machinery to BOOTSTRAP the corpus: a VLM reads structured labels, two independent
+reads adversarially verify, and a label confidence gates each figure into
+auto-accepted vs needs-human-review. "Labelling" becomes "human-verify the
+low-confidence minority" — the confidence-gated labelling the whole roadmap aims
+at, applied to corpus construction.
+
+- `autolabel.py` — `LABEL_SCHEMA` (panel count; per-panel y/x axis kind+unit+range,
+  arm count, censoring, at-risk table) + `compare_labels` (ORDER-INVARIANT panel
+  matching; structural-field agreement → confidence + `needs_human_review`;
+  agreed-not-KM is a clean negative) + `corpus_record`.
+- `render_figures.py` — full-figure PNGs from corpus PDFs. `build_corpus.py` —
+  the double-read workflow output → `labels.jsonl` with provenance + the gate.
+- Tests: `test_autolabel.py` (9) incl. panel-reorder + agreed-not-KM.
+
+**Seed corpus (15 figures; double-read + verify workflow, 30 agents):**
+- **8 KM figures (18 panels), 7 non-KM** (locator false-positives — useful
+  negative labels). **15/15 auto-accepted, mean double-read confidence 1.000**,
+  0 needs-review (the two reads agreed on every structural field after
+  order-invariant matching).
+- **Independently validated** PMC2247136 (by direct read): 4 panels with 2/4/2/4
+  arms, survival-percent, months 0-30 — exactly the auto-label. The two workflow
+  reads differed only on panel ORDER, which `compare_labels` correctly does not
+  flag.
+
+**Honest limits / next:**
+- **Acquisition is network-blocked in this environment** — `acquire_corpus.py`
+  hit `getaddrinfo failed` on all 200 NCBI/Europe-PMC fetches (DNS). The
+  acquisition is wired and ready; the corpus grows when run with network, and the
+  labelling machine scales to whatever it returns.
+- **Locator precision is the corpus-quality ceiling:** 7/15 located regions were
+  NOT KM figures (e.g. a methods page) — the auto-labeller correctly tags these
+  `is_km_figure:false`, but improving `figure_locator` (require figure-caption
+  context, downweight body-text KM mentions) is the highest-value next step for
+  corpus yield. ADVANCE (NEJM, non-PMC) wasn't even located — premium PDFs need a
+  different path.
+- **Lever 3 needs PIXEL MASKS, not structured labels.** The bridge is
+  weak-labelling: derive masks from the CV curve extraction on high-confidence /
+  auto-accepted figures, then train the U-Net on those (self-distillation) — a
+  clean next step now that confidence-gating identifies the trustworthy figures.
