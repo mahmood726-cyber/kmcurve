@@ -424,3 +424,33 @@ regions were non-KM). Fix: anchor the keyword to a real FIGURE CAPTION.
 Net: caption-anchoring is the single change that lifts corpus yield, and it
 composes with the lever-2 confidence gate (the residual flowchart FP is exactly
 what `is_km_figure:false` + human-review catches).
+
+## Lever 3 real-figure training: weak labels + the data-gate (measured) — 2026-06-10
+
+With the network back, acquisition added **+40 PMC PDFs (58 total)**. `weak_labels.py`
+derives per-pixel arm masks from the CV extraction (`dark_curve_cloud` ->
+`column_curve_points` -> `separate_arms`) on caption-anchored KM figures, and
+`train_on_figures.py` trains the lever-3 U-Net on those REAL figures (3-class,
+class-weighted CE; dedup across corpus dirs; thickness-dilated strokes so curves
+survive downsizing).
+
+**Measured result (honest negative):**
+- From 58 acquired PDFs, only **9 figures** yield a usable 2-arm weak mask
+  (~16% — most PMC PDFs are vector, single-arm, lack a detectable plot box, or
+  aren't caption-anchored).
+- Trained on ~8 figures (22 boxes), the U-Net **does not learn** curve
+  segmentation: loss stays ~flat (1.09 -> 1.086) and **held-out arm-IoU ~= 0.00**
+  (pixel-acc 0.96 is meaningless — background is ~96%). Stroke thickness (1->3)
+  and resolution (96x128 -> 128x160) tweaks did not help.
+- **Conclusion: lever 3 is DATA-gated, not architecture-gated.** The synthetic
+  smoke test already proved the train->infer path learns when given enough clean
+  data; on ~8 real figures it cannot. The requirement is corpus SCALE — order
+  hundreds of usable 2-arm figures, i.e. thousands of acquired PDFs (at ~16%
+  usable yield). The pipeline (acquire -> caption-anchor locate -> weak-label ->
+  train -> eval) is built, tested, and scales; only the figure count is missing.
+
+This de-risks the roadmap: do NOT invest in U-Net architecture tuning yet —
+invest in corpus growth (acquisition at scale + hand-verified masks for the
+auto-accepted high-confidence figures). The weak-label bootstrap is the right
+day-1 substitute, but a heuristic-distilled model cannot exceed the heuristic;
+real gains need real masks on hard (coloured/dashed/overlapping) figures.
