@@ -18,3 +18,4 @@ orjson==3.10.7
 pyyaml==6.0.2
 rich==13.7.1
 pulp==2.8.0
+torch>=2.2  ; OPTIONAL, lever-3 ML curve segmentation (unet_segment.py) only. CPU build is fine: pip install torch --index-url https://download.pytorch.org/whl/cpu . The rest of the pipeline does not import torch (test_unet_smoke.py skips without it).

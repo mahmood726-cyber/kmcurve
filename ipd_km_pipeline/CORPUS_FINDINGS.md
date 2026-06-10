@@ -329,3 +329,20 @@ Validation (`validate_confidence.py`): the correlated-misread blind spot
 at-risk follow-up reference is supplied. This ties the safeguard into the
 at-risk OCR already in the raster pipeline and the figure caption from
 `figure_locator`. Tests: +5 (`test_axis_cross_check.py`); suite 20/20.
+
+## ML curve segmentation scaffold (lever 3) — 2026-06-10
+
+`unet_segment.py`: a tiny 2-level U-Net (`build_unet`) that labels each pixel
+background / arm-1 / arm-2 / censor-mark, plus a synthetic KM generator
+(`synthetic_km_sample`) and a train/infer path (`train`, `segment`). This
+replaces the fragile dark-cloud pixel heuristics (`dark_curve_cloud` +
+`column_curve_points`) where curves are coloured / dashed / overlapping or
+near-coincident at high survival — the circrep "2px shift flips the events"
+problem.
+
+**Scaffold only — not a trained model.** `test_unet_smoke.py` proves the
+train→infer path end-to-end on synthetic data (loss falls, train-sample pixel
+accuracy > 0.9), and skips cleanly if torch is absent. A production model needs
+the **labelled corpus (lever 2)** — that is the hard gate. The synthetic
+generator doubles as a pre-training bootstrap until real labels exist.
+torch (CPU) is the only new dependency.
