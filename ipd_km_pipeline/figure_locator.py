@@ -49,6 +49,7 @@ class KMFigure:
     bbox: Optional[tuple] = None  # (x0, top, x1, bottom) of the figure region
     n_vector_curves: int = 0
     n_numeric_words: int = 0
+    caption_anchored: bool = False  # KM keyword sits in a real figure caption
 
 
 def _big_images(page):
@@ -62,42 +63,88 @@ def _big_images(page):
     return out
 
 
-def locate_km_figures(pdf_path: str, max_candidates: int = 5) -> List[KMFigure]:
-    """Return ranked KM-figure candidates for a PDF."""
+def _caption_blocks(text: str) -> List[str]:
+    """Figure-caption blocks on a page: a line whose 'Figure N' sits at the START
+    (a caption) -- not mid-sentence (an inline cross-reference like '... in Fig.
+    3 ...'). Each block is the caption line plus up to two continuation lines.
+    """
+    lines = text.splitlines()
+    out: List[str] = []
+    for idx, line in enumerate(lines):
+        m = _FIG_RE.search(line)
+        if not m:
+            continue
+        pre = line[: m.start()].strip()
+        # leading text before "Figure N" => inline reference, not a caption;
+        # a "(" prefix is a parenthetical cross-ref "(Figure 3C). ..."
+        if len(pre) > 3 or pre.endswith("("):
+            continue
+        # a subpanel ref ("Figure 3C)", "Fig 2A,") has a letter glued to the
+        # number then punctuation/space -- a real caption has ". ", " <Title>", ":"
+        after = line[m.end(): m.end() + 2]
+        if re.match(r"^[A-Za-z][\)\s,.;]", after):
+            continue
+        out.append(" ".join(lines[idx: idx + 3]).strip()[:240])
+    return out
+
+
+def _area(b):
+    return (b[2] - b[0]) * (b[3] - b[1])
+
+
+def locate_km_figures(pdf_path: str, max_candidates: int = 5,
+                      require_caption: bool = False) -> List[KMFigure]:
+    """Return ranked KM-figure candidates for a PDF.
+
+    A page is a strong candidate only when the survival-figure keyword appears in
+    a real FIGURE CAPTION ("Figure N. ... Kaplan-Meier ..."), not merely in body
+    text (a Methods sentence + an unrelated image was the dominant false-positive
+    -- 7/15 in the lever-2 corpus). Caption-anchored pages always outrank
+    body-text-only pages; ``require_caption=True`` drops body-only candidates
+    entirely (use for high-precision corpus building).
+    """
     cands: List[KMFigure] = []
     with pdfplumber.open(pdf_path) as pdf:
         for i, page in enumerate(pdf.pages):
             text = page.extract_text() or ""
             if not _KM_RE.search(text):
-                continue  # no survival-figure language on this page
-            # caption snippet: the line mentioning the KM keyword
-            caption = ""
-            for line in text.splitlines():
-                if _KM_RE.search(line):
-                    caption = line.strip()[:160]
-                    break
+                continue  # no survival-figure language anywhere on the page
+
+            blocks = _caption_blocks(text)
+            km_caption = next((b for b in blocks if _KM_RE.search(b)), "")
+
             words = page.extract_words()
             n_num = sum(1 for w in words if _NUM_RE.fullmatch(w["text"]))
             n_curves = len(page.curves)
             big = _big_images(page)
 
-            # decide kind + score
-            has_caption_fig = bool(_FIG_RE.search(caption))
+            # plottable-content base score
             if n_curves >= 200 and n_num >= 6:
-                kind, bbox = "vector", None
-                score = 3.0 + (1.0 if has_caption_fig else 0.0)
+                kind, bbox, base = "vector", None, 3.0
             elif big and n_num >= 6:
-                kind, bbox = "raster", max(big, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
-                score = 2.0 + (1.0 if has_caption_fig else 0.0)
+                kind, bbox, base = "raster", max(big, key=_area), 2.0
             elif n_curves >= 200:
-                kind, bbox, score = "vector", None, 1.5
+                kind, bbox, base = "vector", None, 1.5
             elif big:
-                kind, bbox, score = "raster", max(big, key=lambda b: (b[2]-b[0])*(b[3]-b[1])), 1.0
+                kind, bbox, base = "raster", max(big, key=_area), 1.0
             else:
-                continue  # caption but no plottable content on this page
-            cands.append(KMFigure(page_index=i, kind=kind, caption=caption,
-                                  score=score, bbox=bbox,
-                                  n_vector_curves=n_curves, n_numeric_words=n_num))
+                continue  # KM language but no plottable content
+
+            if km_caption:
+                score, caption = base + 2.0, km_caption          # real KM caption
+            else:
+                if require_caption:
+                    continue
+                # body-text mention only -> a Methods/Results page with an
+                # unrelated figure; keep only as a weak fallback far below any
+                # caption-anchored page.
+                snippet = blocks[0] if blocks else next(
+                    (ln.strip() for ln in text.splitlines() if _KM_RE.search(ln)), "")
+                score, caption = base * 0.25, snippet
+            cands.append(KMFigure(
+                page_index=i, kind=kind, caption=caption[:200], score=round(score, 3),
+                bbox=bbox, n_vector_curves=n_curves, n_numeric_words=n_num,
+                caption_anchored=bool(km_caption)))
     cands.sort(key=lambda c: -c.score)
     return cands[:max_candidates]
 

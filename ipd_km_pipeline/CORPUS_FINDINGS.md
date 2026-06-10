@@ -389,3 +389,38 @@ at, applied to corpus construction.
   weak-labelling: derive masks from the CV curve extraction on high-confidence /
   auto-accepted figures, then train the U-Net on those (self-distillation) — a
   clean next step now that confidence-gating identifies the trustworthy figures.
+
+## figure_locator precision: caption-anchoring (lever 2 yield) — 2026-06-10
+
+The lever-2 ceiling was locator precision: a page matched if the survival
+keyword appeared ANYWHERE in its text, so a Methods sentence ("Kaplan-Meier
+analysis was performed...") + any large image scored as a KM figure (7/15 located
+regions were non-KM). Fix: anchor the keyword to a real FIGURE CAPTION.
+
+- `_caption_blocks` extracts only lines whose "Figure N" sits at the START (a
+  caption), rejecting inline cross-references ("... in Figure 2 ..."),
+  parenthetical refs ("(Figure 3C). ..."), and subpanel refs ("Figure 2A,").
+- A page is a strong candidate only when a survival keyword appears in such a
+  caption block; body-text-only mentions are kept as weak fallbacks far below
+  (score x0.25) and exposed via `caption_anchored`. `require_caption=True` drops
+  body-only candidates entirely (high-precision corpus building).
+- Tests: `test_figure_locator.py` (8) — caption vs inline/parenthetical/subpanel.
+
+**Measured on the 18-PDF corpus (top hit):**
+- **12/18 now caption-anchored**; all 8 previously-confirmed KM figures still
+  anchored (no regression).
+- **3 rescues** — `nci49035` (p0->p3), `fimmu1753591` (p6->p4),
+  `fonc1744027` (p2->p5) were located on the WRONG page before (labelled
+  `is_km:false`); the new locator anchors the real KM caption. All three
+  **verified by direct read** to be genuine KM figures (OS curves, at-risk
+  tables, censoring). KM-figure yield on the rendered set: **8/15 -> 11/15
+  (53% -> 73%)**; caption-anchored precision **11/12** (residual FP:
+  `fonc1784342`, a patient-selection flowchart whose multi-line caption mentions
+  "survival").
+- The 3 non-anchored top hits (`PMC1977864`, `PMC7845702` cost figure,
+  `PMC8420689` flowchart) are correctly de-ranked (score 0.5, `caption_anchored:
+  false`) — body-text mentions with no actual KM figure on the located page.
+
+Net: caption-anchoring is the single change that lifts corpus yield, and it
+composes with the lever-2 confidence gate (the residual flowchart FP is exactly
+what `is_km_figure:false` + human-review catches).

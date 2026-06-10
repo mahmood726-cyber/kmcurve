@@ -104,6 +104,10 @@ flips circrep's reconstructed events).
   is already LRU-cached per figure; Tesseract per-tick per-panel is the slow part).
 - Locator precision: downweight body-text KM mentions (require figure-caption
   context), e.g. fonc1744027 located a methods page.
+  **DONE (2026-06-10):** `figure_locator` now caption-anchors (`_caption_blocks`
+  + `caption_anchored` + `require_caption`); 8 tests. Corpus top-hit: 12/18
+  anchored, 3 rescues (incl. fonc1744027 p2->p5), KM yield 8/15->11/15 (53->73%),
+  anchored precision 11/12. See CORPUS_FINDINGS.md -> "figure_locator precision".
 - x-axis label classification on imperfect/too-tall boxes (several calib_fail
   have x-ticks=0 because the box or x-band is slightly off).
 
