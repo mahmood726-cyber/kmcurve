@@ -215,3 +215,47 @@ per-panel errors) next.
    addressable fraction of each path.
 3. **Panel detection robustness** — handle tick-only axes (no frame box).
 4. Then the verified-HR accuracy corpus can grow across both paths.
+
+## VLM-assisted calibration pilot (lever 1) — 2026-06-10
+
+Built `vlm_calibrate.py`: classical CV owns geometry (`detect_tick_positions`),
+a vision model owns reading (tick VALUES + axis semantics), never trusted for
+pixel coordinates. Two paths share one ingest core: the Claude vision API
+(forced structured tool call) and an agent/replay path. Wired as an opt-in
+fallback in `raster_km._panel_to_ipd` (`KM_VLM_CALIBRATE=1`) after the OCR
+`auto_calibrate_axes` fails closed. Fail-closed throughout.
+
+**Pilot** (22 corpus axis-pairs with CV-detectable ticks on both axes;
+`render_corpus_crops.py` + an adversarial read/verify workflow — two independent
+VLM reads per crop, accept only on agreement; `eval_vlm_calibration.py`):
+
+| metric | value |
+|---|---|
+| boxes | 22 |
+| both-reader agreement (verify gate) | 11/22 |
+| OCR `auto_calibrate_axes` calibrates | 8/22 |
+| VLM calibrates | 4/22 |
+| **VLM rescues (OCR fail → VLM ok)** | **3** (R²=1.0000 each) |
+| **combined OCR ∪ VLM** | **11/22 vs 8/22 OCR-alone (+37%)** |
+
+**Findings:**
+- **Reading is solved.** Every verified VLM read was correct (R²=1.0000 on all 4
+  fits + 3 rescues). The VLM trivially reads label classes that defeat OCR —
+  `Baseline / Month 6 / Month 9 …` and `2.5, 7.5, 12.5`.
+- **The bottleneck moved** from "OCR can't read tick labels" to **CV tick-count
+  vs labelled-tick-count mismatch**: minor ticks make CV over-count (e.g. 11 CV
+  ticks vs 6 labels), faint ticks make it under-count (4 vs 5). The `bctt`
+  cluster fails here even though the VLM read perfectly.
+- **Count-mismatch must fail closed — it is NOT safe to guess.** Because tick
+  values are arithmetic and positions evenly spaced, *both sequences are linear
+  in index*, so ANY even decimation/alignment fits with R²=1. R² cannot
+  disambiguate a wrong alignment → guessing the correspondence would silently
+  miscalibrate. The strict count-match gate is a correctness requirement.
+- VLM is **complementary, not strictly better**: it rescues boxes OCR fails, and
+  fails some boxes OCR handles. The right production posture is the wired
+  fallback (OCR first, VLM on OCR-failure), which is what shipped.
+
+**Next for lever 1 (well-scoped):** make `detect_tick_positions` isolate MAJOR
+(labelled) ticks — by tick LENGTH (major ticks are drawn longer) and/or
+proximity to a detected label glyph — so the CV count matches the VLM read count.
+That converts the count-mismatch cluster without any unsafe alignment guessing.

@@ -23,6 +23,7 @@ the identical IPD/HR output as the vector path.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -738,7 +739,18 @@ def pdf_raster_to_ipd(pdf_path: str, dpi: int = 200,
     from guyot import reconstruct_arm
 
     def _panel_to_ipd(g, box, text_boxes):
-        x_fit, y_fit = auto_calibrate_axes(g, box)  # fails closed -> raises
+        try:
+            x_fit, y_fit = auto_calibrate_axes(g, box)  # OCR path; fails closed
+        except Exception:
+            # Roadmap lever 1: when OCR calibration fails closed (the dominant
+            # corpus failure), try VLM-assisted calibration -- CV tick positions
+            # + a vision model reading the tick VALUES. Opt-in (costs an API
+            # call + needs ANTHROPIC_API_KEY); also fails closed -> 2-click.
+            if os.environ.get("KM_VLM_CALIBRATE") == "1":
+                from vlm_calibrate import vlm_calibrate_axes
+                x_fit, y_fit = vlm_calibrate_axes(g, box)
+            else:
+                raise
         # auto-detect the y-axis scale from the calibrated range: a span > ~2
         # means a percent axis (0-100), else a 0-1 proportion. (value_scale=None
         # -> auto; the benchmark assuming 1.0 wrongly flattened 0-100% figures.)
