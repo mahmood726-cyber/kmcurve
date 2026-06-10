@@ -454,3 +454,48 @@ invest in corpus growth (acquisition at scale + hand-verified masks for the
 auto-accepted high-confidence figures). The weak-label bootstrap is the right
 day-1 substitute, but a heuristic-distilled model cannot exceed the heuristic;
 real gains need real masks on hard (coloured/dashed/overlapping) figures.
+
+## True-IPD external HR-accuracy: the first non-circular accuracy number — 2026-06-10
+
+Every prior corpus number is figure-INTERNAL (reconstructed events vs the
+figure's own at-risk table) or synthetic. The question that matters for
+meta-analysis — *how close is the reconstructed HR to the TRUE HR from real
+patient-level data?* — had no answer because no published-figure corpus ships
+attached IPD. `realipd_benchmark.py` borrows the sibling project
+`C:\Projects\registry-ipd`'s gold standard (~40 open true-IPD datasets:
+Rdatasets / KMsurv / asaur / cBioPortal-TCGA, with arm/time/status configs):
+render the TRUE KM curve to an actual raster → run THIS pipeline
+(`raster_km` dark-cloud extract → `separate_arms` → Guyot) → log-rank HR vs the
+TRUE HR. Same estimator (`guyot.logrank_hr`) for truth and recon, so the
+fold-error is pipeline-induced. Calibration + at-risk table supplied exactly
+(production OCRs both) → isolates curve-extraction + arm-separation +
+reconstruction. 10 classic datasets, +7 tests (`test_realipd_benchmark.py`).
+
+| reconstruction mode | median HR fold-err | p90 | within 20% |
+|---|---:|---:|---:|
+| **curve-only** (no at-risk table) | 1.30 | 18.7 | 2/10 |
+| **censoring-informed** (+ at-risk table) | **1.09 (~9%)** | 1.52 | **9/10** |
+
+**Two findings:**
+- **The at-risk table is essential, not optional.** Curve-only is unusable —
+  median 1.30, a p90 of 18.7×, and HR *inversions* on well-separated arms
+  (`diabetic` true 0.47 → curve-only 0.83). Root cause (`guyot.reconstruct_ipd_guyot`
+  line ~127): with no number-at-risk, Guyot approximates the risk set as
+  `survival × N`, i.e. assumes ZERO censoring, attenuating the HR and collapsing
+  censored plateaus (e.g. `pbc` true tail 0.36 → recon 0.00). Feeding the ~6-point
+  at-risk table a real figure prints (which `extract_at_risk_raster` already OCRs)
+  switches Guyot to censoring-informed accounting → median fold **1.09**.
+- **This validates the pipeline AND the lever-3 priority.** ~9% median HR error
+  on true IPD (vs registry-ipd's registry curve-only ~12% / Titman-QP ~5%) is a
+  genuine, competitive external number — the pipeline works when the anchors are
+  present. It also corroborates registry-ipd's central finding that the binding
+  constraint is anchor/at-risk information, not pixel reading. The residual error
+  concentrates in arm-separation on monochrome curves (the `nwtco` extreme
+  imbalance stays outside 20%) — exactly the failure mode lever 3 (ML segmentation)
+  targets, which the corpus-scale acquisition is feeding.
+
+Honest scope: clean single-style monochrome rendered curves with EXACT
+calibration + at-risk table are an upper bound — real figures add coloured/
+overlapping arms, censor ticks, and OCR error on both calibration and the at-risk
+table. Shared artifact: `registry-ipd/validate/real_pipeline_headtohead_results.json`
++ a real-pipeline section appended to registry-ipd `HEADTOHEAD.md`.
