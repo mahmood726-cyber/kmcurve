@@ -241,6 +241,18 @@ def _hr_from(arm_exp_xy, arm_ctl_xy, n_exp, n_ctl,
     return logrank_hr(et, ee, ct, ce)["hr"]
 
 
+def _hr_qp(arm_exp_xy, arm_ctl_xy, n_exp, n_ctl, e_exp, e_ctl, t_max) -> float:
+    """Reconstruct both mapped arms with the Titman-QP backend -> log-rank HR."""
+    from qp_reconstruct import reconstruct_arm_qp
+    et, ee = reconstruct_arm_qp(arm_exp_xy[:, 0], arm_exp_xy[:, 1],
+                                total_n=n_exp, total_events=e_exp, follow_up_max=t_max)
+    ct, ce = reconstruct_arm_qp(arm_ctl_xy[:, 0], arm_ctl_xy[:, 1],
+                                total_n=n_ctl, total_events=e_ctl, follow_up_max=t_max)
+    if et.size == 0 or ct.size == 0:
+        return float("nan")
+    return logrank_hr(et, ee, ct, ce)["hr"]
+
+
 def _fold(recon_hr: float, true_hr: float) -> Optional[float]:
     if (np.isfinite(recon_hr) and np.isfinite(true_hr)
             and recon_hr > 0 and true_hr > 0):
@@ -276,13 +288,19 @@ def recon_and_score(csv_path: Path, cfg: DSConfig) -> dict:
     else:
         exp_xy, ctl_xy = arms_xy[1], arms_xy[0]
 
-    # Curve-only (no at-risk table) vs censoring-informed (the printed risk table).
+    # Three backends: curve-only Guyot; censoring-informed Guyot (printed risk
+    # table); Titman-QP (the "N (events)" cell -> events-informed, ported from
+    # registry-ipd). All consume the SAME extracted curve, so differences are
+    # purely the reconstruction backend.
     nar_exp = _at_risk_table(et, t_max)
     nar_ctl = _at_risk_table(ct, t_max)
+    e_exp, e_ctl = int(ee.sum()), int(ce.sum())
     hr_curve = _hr_from(exp_xy, ctl_xy, n_exp, n_ctl)
     hr_nar = _hr_from(exp_xy, ctl_xy, n_exp, n_ctl, nar_exp, nar_ctl)
+    hr_qp = _hr_qp(exp_xy, ctl_xy, n_exp, n_ctl, e_exp, e_ctl, t_max)
     fold_curve = _fold(hr_curve, true_hr)
     fold_nar = _fold(hr_nar, true_hr)
+    fold_qp = _fold(hr_qp, true_hr)
 
     return {
         "ds": cfg.ds, "label": cfg.label, "status": "scored",
@@ -290,8 +308,10 @@ def recon_and_score(csv_path: Path, cfg: DSConfig) -> dict:
         "true_hr": round(true_hr, 4),
         "recon_hr_curveonly": round(hr_curve, 4) if np.isfinite(hr_curve) else None,
         "recon_hr_nar": round(hr_nar, 4) if np.isfinite(hr_nar) else None,
+        "recon_hr_qp": round(hr_qp, 4) if np.isfinite(hr_qp) else None,
         "fold_curveonly": round(fold_curve, 4) if fold_curve else None,
         "fold_nar": round(fold_nar, 4) if fold_nar else None,
+        "fold_qp": round(fold_qp, 4) if fold_qp else None,
         "abs_log_err_nar": round(abs(np.log(fold_nar)), 4) if fold_nar else None,
         "true_events": int(ee.sum() + ce.sum()),
     }
@@ -334,33 +354,34 @@ def run(registry_dir: Path, datasets: Optional[List[str]] = None) -> dict:
             }
         summary["censoring_informed"] = _stats("fold_nar")
         summary["curve_only"] = _stats("fold_curveonly")
+        summary["qp"] = _stats("fold_qp")
     return {"summary": summary, "results": results}
 
 
 def _print_table(out: dict) -> None:
-    print(f"\n{'dataset':<12}{'n(e/c)':>11}{'trueHR':>9}{'HR(c-only)':>12}"
-          f"{'HR(+NAR)':>10}{'fold(c)':>9}{'fold(N)':>9}")
-    print("-" * 76)
+    print(f"\n{'dataset':<12}{'n(e/c)':>11}{'trueHR':>9}{'fold(curve)':>12}"
+          f"{'fold(+NAR)':>11}{'fold(QP)':>10}")
+    print("-" * 66)
     for r in out["results"]:
         if r.get("status") == "scored":
             nec = f"{r['n_exp']}/{r['n_ctl']}"
             print(f"{r['ds']:<12}{nec:>11}{r['true_hr']:>9}"
-                  f"{str(r['recon_hr_curveonly']):>12}{str(r['recon_hr_nar']):>10}"
-                  f"{str(r['fold_curveonly']):>9}{str(r['fold_nar']):>9}")
+                  f"{str(r['fold_curveonly']):>12}{str(r['fold_nar']):>11}"
+                  f"{str(r['fold_qp']):>10}")
         else:
             extra = (" · " + r["error"]) if r.get("error") else ""
             print(f"{r['ds']:<12}{'':>11}  {r.get('status')}{extra}")
     s = out["summary"]
-    print("-" * 76)
+    print("-" * 66)
     if s.get("n_scored"):
-        ci, co = s.get("censoring_informed"), s.get("curve_only")
         print(f"scored {s['n_scored']}/{s['n_total']}")
-        if co:
-            print(f"  curve-only        : median fold {co['median']}  p90 {co['p90']}"
-                  f"  within20% {co['within_20pct']}/{co['n']}")
-        if ci:
-            print(f"  censoring-informed: median fold {ci['median']}  p90 {ci['p90']}"
-                  f"  within20% {ci['within_20pct']}/{ci['n']}")
+        for key, lbl in (("curve_only", "curve-only Guyot  "),
+                         ("censoring_informed", "Guyot + NAR table "),
+                         ("qp", "Titman-QP (events)")):
+            st = s.get(key)
+            if st:
+                print(f"  {lbl}: median fold {st['median']}  p90 {st['p90']}"
+                      f"  within20% {st['within_20pct']}/{st['n']}")
     else:
         print(f"scored 0/{s['n_total']} -- no datasets reconstructed 2 arms")
 
