@@ -59,6 +59,13 @@ flips circrep's reconstructed events).
    censoring marks + CI bands -- robust where the current pixel heuristics are
    fragile (the circrep 2px-flip problem). Trains on lever 2's corpus.
 
+   **STATUS (2026-06-10): scaffolded (not trained).** `unet_segment.py` (tiny
+   2-level U-Net + synthetic KM generator + train/infer path) with
+   `test_unet_smoke.py` proving the train->infer path on synthetic data (skips
+   if torch absent). Real training is GATED on lever 2's labelled corpus -- that
+   is the hard blocker. torch (CPU) added as the only new dependency. See
+   CORPUS_FINDINGS.md -> "ML curve segmentation scaffold".
+
 4. **Calibrated confidence** that PREDICTS reconstruction error (not just
    calibration R^2), so auto-accept vs human-flag is reliable. Validate the
    confidence against actual error on lever 2's corpus. This is what makes
