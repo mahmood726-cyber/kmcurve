@@ -35,6 +35,18 @@ flips circrep's reconstructed events).
    crux; do NOT trust the VLM for precise geometry (hallucination) -- structure
    only. Target: turn most of the 7 calib_fail into successes.
 
+   **STATUS (2026-06-10): shipped + piloted.** `vlm_calibrate.py` (API path +
+   agent/replay path, shared ingest core), wired as an opt-in fallback in
+   `raster_km` (`KM_VLM_CALIBRATE=1`), 7/7 unit tests, fail-closed. Pilot on 22
+   corpus axis-pairs (read + adversarial-verify workflow): combined OCR u VLM
+   **11/22 vs 8/22 OCR-alone (+3 rescues, R^2=1.0)**. KEY FINDING: VLM *reading*
+   is solved (every verified read correct); the bottleneck MOVED to CV
+   tick-count vs labelled-tick-count mismatch. Count-mismatch MUST fail closed
+   (arithmetic values x even positions => any alignment fits R^2=1, so guessing
+   silently miscalibrates). See CORPUS_FINDINGS.md -> "VLM-assisted calibration
+   pilot". **Refined next step:** major-tick-aware `detect_tick_positions` (by
+   tick length / label proximity) so CV count matches the VLM read count.
+
 2. **Labelled corpus (200-1000 figures)**. You cannot push past the long tail
    -- or even MEASURE fractional gains -- on n=18. Reuse acquire_corpus.py
    (Europe PMC) + figure_locator.py; hand-label panel counts, axis type/range,
