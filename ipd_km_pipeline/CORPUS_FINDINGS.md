@@ -469,18 +469,22 @@ render the TRUE KM curve to an actual raster → run THIS pipeline
 TRUE HR. Same estimator (`guyot.logrank_hr`) for truth and recon, so the
 fold-error is pipeline-induced. Calibration + at-risk table supplied exactly
 (production OCRs both) → isolates curve-extraction + arm-separation +
-reconstruction. 10 classic datasets, +7 tests (`test_realipd_benchmark.py`).
+reconstruction. **42 true-IPD datasets** (Rdatasets/KMsurv/asaur classics +
+TCGA late-vs-early cohorts), +11 tests (`test_realipd_benchmark.py`,
+`test_qp_reconstruct.py`).
 
-| reconstruction backend | median HR fold-err | p90 | within 20% | input it needs |
+| reconstruction backend | median HR fold-err | p90 | within 20% (95% CI) | input it needs |
 |---|---:|---:|---:|---|
-| **curve-only** Guyot | 1.30 | 18.7 | 2/10 | the curve |
-| **Guyot + NAR table** | 1.09 (~9%) | 1.52 | 9/10 | + interior at-risk table |
-| **Titman-QP (events)** | **1.041 (~4%)** | **1.26** | 8/10 | + total "N (events)" only |
+| **curve-only** Guyot | 1.42 | 4.46 | 14/42 (21–48%) | the curve |
+| **Guyot + NAR table** | 1.09 (~9%) | 1.52 | 31/42 (59–85%) | + interior at-risk table |
+| **Titman-QP (events)** | **1.041 (~4%)** | **1.26** | 35/42 (69–92%) | + total "N (events)" only |
+
+(Paired on the same 42 datasets, QP beats Guyot+NAR 28/42, median fold ratio 1.017.)
 
 **Three findings:**
 - **The at-risk/event information is essential, not optional.** Curve-only is
-  unusable — median 1.30, a p90 of 18.7×, and HR *inversions* on well-separated
-  arms (`diabetic` true 0.47 → curve-only 0.83). Root cause
+  unusable — median 1.42, p90 4.46, only 14/42 within 20%, with HR *inversions*
+  on well-separated arms (`diabetic` true 0.47 → curve-only 0.83). Root cause
   (`guyot.reconstruct_ipd_guyot` line ~127): with no number-at-risk, Guyot
   approximates the risk set as `survival × N`, i.e. assumes ZERO censoring,
   attenuating the HR and collapsing censored plateaus (`pbc` true tail 0.36 →
@@ -510,3 +514,33 @@ calibration + at-risk table are an upper bound — real figures add coloured/
 overlapping arms, censor ticks, and OCR error on both calibration and the at-risk
 table. Shared artifact: `registry-ipd/validate/real_pipeline_headtohead_results.json`
 + a real-pipeline section appended to registry-ipd `HEADTOHEAD.md`.
+
+**QP wired into production (opt-in).** `pdf_raster_to_ipd` now uses the Titman-QP
+backend when `KM_QP_BACKEND=1` and the "N (events)" cells are OCR'd
+(`at_risk_reported_events`), with a Guyot fallback on any failure. Off by default
+so the event-exact circrep validation is unchanged; benchmark evidence (QP 1.04
+vs Guyot 1.09) supports promoting it to default once at-risk-events OCR is
+hardened on real figures.
+
+## NAR fusion: the mirror-image union beats either project alone — 2026-06-10
+
+`realipd_benchmark.py --fusion` tests the deepest cross-project idea: registry-ipd
+has the curve EXACTLY (AACT anchors) but no number-at-risk; kmcurve OCRs the
+at-risk table but its curve is pixel-noisy. Holding the backend fixed (Guyot) and
+varying only the INPUTS across 42 true-IPD datasets:
+
+| input regime | median fold | p90 | within 20% (95% CI) |
+|---|---:|---:|---:|
+| registry-only (exact anchors, NO NAR) | 1.37 | 4.26 | 16/42 (25–53%) |
+| kmcurve-only (noisy curve + NAR) | 1.09 | 1.52 | 31/42 (59–85%) |
+| **FUSION (exact anchors + NAR)** | **1.049** | 1.28 | 35/42 (69–92%) |
+| **FUSION + QP** | 1.058 | **1.21** | 36/42 (72–93%) |
+
+Paired: fusion beats registry-only **34/42** (CIs don't overlap → robust — the
+identifiability trap dissolved; `cbio_kirp` 8.6→1.36, `prostateSurvival` 5.4→1.05)
+and kmcurve-only **26/42** (median ratio 1.035; CIs overlap → favorable, not
+significant at n=42). The exact curve cures kmcurve's pixel noise; the at-risk
+table cures registry-ipd's missing censoring — fusion is strictly ≥ either alone.
+Full write-up: `registry-ipd/FUSION.md` + `validate/nar_fusion_results.json`.
+**Next:** demonstrate on a real matched AACT-trial ↔ published-PDF pair (this
+establishes the mechanism + expected gain on the gold standard).

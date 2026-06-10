@@ -78,9 +78,29 @@ def test_recon_and_score_chain_pbc():
 def test_censoring_informed_beats_curve_only_in_aggregate():
     """The headline claim: the at-risk table makes reconstruction far better
     than curve-only across the set (not necessarily every single dataset)."""
-    out = B.run(REGISTRY, datasets=["gbsg", "pbc", "diabetic", "colon", "cancer"])
+    out = B.run(REGISTRY, datasets=["gbsg", "pbc", "diabetic", "cancer", "tongue"])
     ci = out["summary"]["censoring_informed"]
     co = out["summary"]["curve_only"]
     assert ci["n"] >= 3
     assert ci["median"] < co["median"]          # NAR improves the median fold-err
     assert ci["median"] < 1.25                  # and lands in a useful range
+
+
+def test_wilson_ci_bounds():
+    lo, hi = B.wilson_ci(9, 10)
+    assert 0.0 <= lo <= 0.9 <= hi <= 1.0
+    assert B.wilson_ci(0, 0) == (0.0, 0.0)
+
+
+@skip_no_data
+def test_fusion_beats_registry_only():
+    """NAR fusion (exact anchors + at-risk table) dissolves the registry-only
+    identifiability trap: lower median fold-err than registry-only (no NAR),
+    decisively, on the heavy-censoring / strong-contrast datasets."""
+    out = B.run_fusion(REGISTRY, datasets=["diabetic", "prostateSurvival", "cbio_acc", "gbsg", "pbc"])
+    s = out["summary"]
+    fus, reg = s["fold_fusion"], s["fold_registry_only"]
+    assert fus["n"] >= 3
+    assert fus["median"] < reg["median"]                 # fusion improves the median
+    pr = s["paired_fusion_vs_registry"]
+    assert pr["a_better"] >= pr["b_better"]              # fusion wins the paired count

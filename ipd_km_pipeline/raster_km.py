@@ -765,6 +765,13 @@ def pdf_raster_to_ipd(pdf_path: str, dpi: int = 200,
         gap = max(0.02 * (float(np.ptp(v_)) or 1.0), 1e-6)
         arms = separate_arms(np.column_stack([t_, v_]), n_arms=2, gap=gap)
         at_risk = extract_at_risk_raster(g, box)
+        # Opt-in Titman-QP backend (KM_QP_BACKEND=1): when the "N (events)" cells
+        # are OCR'd, the QP uses the event count as a linear constraint and beats
+        # Guyot on true-IPD HR accuracy (median fold 1.04 vs 1.09; see
+        # realipd_benchmark.py). Off by default so the event-exact circrep
+        # validation is unchanged; Guyot is the fallback on any QP failure.
+        use_qp = os.environ.get("KM_QP_BACKEND") == "1"
+        rep_events = at_risk_reported_events(g, box) if use_qp else []
         out = []
         for i, a in enumerate(arms):
             if a.size == 0:
@@ -776,7 +783,18 @@ def pdf_raster_to_ipd(pdf_path: str, dpi: int = 200,
                 surv = np.clip(a[:, 1] / vscale, 0.0, 1.0)
             surv = np.minimum.accumulate(surv)  # KM survival is non-increasing
             tn = at_risk[i][0][1] if i < len(at_risk) and at_risk[i] else None
-            et, ev = reconstruct_arm(a[:, 0], surv, total_n=tn)
+            ev_total = rep_events[i] if i < len(rep_events) else None
+            et = ev = None
+            if use_qp and tn and ev_total:
+                try:
+                    from qp_reconstruct import reconstruct_arm_qp
+                    et, ev = reconstruct_arm_qp(a[:, 0], surv, total_n=tn,
+                                                total_events=ev_total,
+                                                follow_up_max=float(a[:, 0].max()))
+                except Exception:
+                    et = ev = None  # fall back to Guyot below
+            if et is None:
+                et, ev = reconstruct_arm(a[:, 0], surv, total_n=tn)
             out.append({"label": f"arm{i}", "time": et, "event": ev,
                         "n_events": int(ev.sum()), "final_survival": float(surv[-1]),
                         "total_n": tn})

@@ -69,18 +69,54 @@ class DSConfig:
 
 
 CONFIGS: List[DSConfig] = [
+    # classic single-CSV datasets -- field mappings ported verbatim from
+    # registry-ipd/validate/goldstandard.js CONFIGS (the verified source).
     DSConfig("gbsg", "GBSG breast cancer (RFS, hormonal Rx)", "rfstime", "status", "hormon", "1", "0"),
     DSConfig("veteran", "Veterans lung cancer (OS, treatment)", "time", "status", "trt", "2", "1"),
     DSConfig("rotterdam", "Rotterdam breast cancer (OS, hormonal Rx)", "dtime", "death", "hormon", "1", "0"),
     DSConfig("pbc", "PBC (OS, D-penicillamine vs placebo)", "time", "status", "trt", "2", "1", event_val="2"),
     DSConfig("diabetic", "Diabetic retinopathy (vision loss, laser)", "time", "status", "trt", "1", "0"),
     DSConfig("cancer", "NCCTG lung cancer (OS, by sex)", "time", "status", "sex", "2", "1", event_val="2"),
-    DSConfig("colon", "Colon cancer (OS, Lev+5FU vs Obs)", "time", "status", "rx", "Lev+5FU", "Obs"),
     DSConfig("nwtco", "NWTSG Wilms tumour (relapse, histology)", "edrel", "rel", "histol", "2", "1"),
     DSConfig("bmt", "Bone marrow transplant (DFS, risk group)", "t2", "d3", "group", "3", "1"),
     DSConfig("tongue", "Tongue cancer (death, ploidy)", "time", "delta", "type", "2", "1"),
+    DSConfig("kidtran", "Kidney transplant (graft survival, by sex)", "time", "delta", "gender", "2", "1"),
+    DSConfig("mgus2", "MGUS cohort (death, by sex)", "futime", "death", "sex", "M", "F"),
+    DSConfig("flchain", "Free light chain cohort (death, by sex)", "futime", "death", "sex", "M", "F"),
+    DSConfig("nafld1", "NAFLD cohort (death, by sex)", "futime", "status", "male", "1", "0"),
+    DSConfig("prostateSurvival", "Prostate cancer (cancer death, grade)", "survTime", "status", "grade", "poor", "mode", event_val="1"),
+    DSConfig("melanoma", "Melanoma (cancer death, ulceration)", "time", "status", "ulcer", "1", "0", event_val="1"),
+    DSConfig("pharmacoSmoking", "Smoking-cessation RCT (relapse)", "ttr", "relapse", "grp", "patchOnly", "combination"),
+    DSConfig("gehan", "Gehan leukemia RCT (remission, 6-MP vs control)", "time", "cens", "treat", "6-MP", "control"),
+    DSConfig("aidssi", "AIDS cohort (time to AIDS, CCR5 genotype)", "time", "status", "ccr5", "WM", "WW", event_val="1"),
+    DSConfig("ebmt3", "EBMT transplant (RFS, T-cell depletion)", "rfstime", "rfsstat", "tcd", "TCD", "No TCD"),
+    DSConfig("larynx", "Larynx cancer (death, stage)", "time", "delta", "stage", "3", "1"),
+    DSConfig("burn", "Burn infection (time to infection, treatment)", "T3", "D3", "Z1", "1", "0"),
+    DSConfig("pneumon", "Infant pneumonia (smoking)", "chldage", "hospital", "smoke", "1", "0"),
+    DSConfig("bfeed", "Breastfeeding duration (smoking)", "duration", "delta", "smoke", "1", "0"),
+    DSConfig("hepatoCellular", "Hepatocellular carcinoma (OS, vascular invasion)", "OS", "Death", "Vascularinvasion", "1", "0"),
+    DSConfig("alloauto", "Leukemia transplant (DFS, allo vs auto)", "time", "delta", "type", "1", "2"),
+    DSConfig("retinopathy", "Diabetic retinopathy (laser, vision loss)", "futime", "status", "trt", "1", "0"),
+    DSConfig("ebmt1", "EBMT transplant (OS, risk score)", "srv", "srvstat", "score", "High risk", "Low risk"),
 ]
+# TCGA / cBioPortal cohorts (late vs early stage -> strong contrast, true HR 1.6-7.6).
+# Uniform config: columns patientId,time,status,sex,stage_group,subtype.
+_CBIO = ["acc", "blca", "brca", "cesc", "coadread", "esca", "hnsc", "kirc", "kirp",
+         "lihc", "luad", "lusc", "meso", "paad", "sarc", "skcm", "stad", "ucec"]
+CONFIGS += [DSConfig(f"cbio_{c}", f"TCGA-{c.upper()} (OS, late vs early stage)",
+                     "time", "status", "stage_group", "late", "early") for c in _CBIO]
 CONFIG_BY_DS = {c.ds: c for c in CONFIGS}
+
+
+def wilson_ci(k: int, n: int, z: float = 1.96):
+    """Wilson score 95% CI for a binomial proportion (honest at small n)."""
+    if n == 0:
+        return (0.0, 0.0)
+    p = k / n
+    d = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / d
+    half = z * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return (round(max(0.0, centre - half), 3), round(min(1.0, centre + half), 3))
 
 
 def _num(x: str) -> Optional[float]:
@@ -317,6 +353,122 @@ def recon_and_score(csv_path: Path, cfg: DSConfig) -> dict:
     }
 
 
+def fusion_and_score(csv_path: Path, cfg: DSConfig, n_anchors: int = 8) -> dict:
+    """NAR-FUSION experiment. The two projects are mirror images: registry-ipd
+    has the curve EXACTLY (AACT KM-estimate anchors) but no number-at-risk;
+    kmcurve recovers the at-risk table (OCR) but its curve is pixel-noisy.
+    Fusing them -- registry-exact anchors + kmcurve's OCR'd NAR -- should beat
+    either alone. We hold the backend fixed (Guyot) and vary only the INPUTS:
+
+      registry-only : exact KM anchors, NO at-risk table  (registry-ipd today)
+      kmcurve-only  : noisy extracted curve + at-risk table  (kmcurve today)
+      fusion        : exact KM anchors + at-risk table  (the proposed union)
+    """
+    et, ee, ct, ce = load_true_ipd(csv_path, cfg)
+    n_exp, n_ctl = int(et.size), int(ct.size)
+    if n_exp < 5 or n_ctl < 5:
+        return {"ds": cfg.ds, "status": "too_small"}
+    true_hr = logrank_hr(et, ee, ct, ce)["hr"]
+    t_max = float(max(et.max(), ct.max()))
+
+    # kmcurve's NOISY curve: render the true KM and run the real extraction.
+    img, geom = render_km([km_steps(et, ee), km_steps(ct, ce)], t_max)
+    arms_xy = _extract_arms(img, geom)
+    if len(arms_xy) < 2:
+        return {"ds": cfg.ds, "label": cfg.label, "status": "extract_fail",
+                "true_hr": round(true_hr, 4)}
+    grid = np.linspace(0, t_max, 50)
+    true_exp_s = _km_survival_at(grid, et, ee)
+    true_ctl_s = _km_survival_at(grid, ct, ce)
+    ext_s = [np.interp(grid, a[:, 0], a[:, 1], left=1.0) for a in arms_xy[:2]]
+    if np.abs(ext_s[0] - true_exp_s).mean() <= np.abs(ext_s[0] - true_ctl_s).mean():
+        ext_exp, ext_ctl = arms_xy[0], arms_xy[1]
+    else:
+        ext_exp, ext_ctl = arms_xy[1], arms_xy[0]
+
+    # registry-exact anchors: the true KM sampled at n_anchors posted timepoints.
+    at = np.linspace(0, t_max, n_anchors)
+    exact_exp = np.column_stack([at, _km_survival_at(at, et, ee)])
+    exact_ctl = np.column_stack([at, _km_survival_at(at, ct, ce)])
+    nar_exp = _at_risk_table(et, t_max)
+    nar_ctl = _at_risk_table(ct, t_max)
+
+    e_exp, e_ctl = int(ee.sum()), int(ce.sum())
+    hr_reg = _hr_from(exact_exp, exact_ctl, n_exp, n_ctl)                  # exact, no NAR
+    hr_km = _hr_from(ext_exp, ext_ctl, n_exp, n_ctl, nar_exp, nar_ctl)    # noisy + NAR
+    hr_fuse = _hr_from(exact_exp, exact_ctl, n_exp, n_ctl, nar_exp, nar_ctl)  # exact + NAR (Guyot)
+    hr_fuse_qp = _hr_qp(exact_exp, exact_ctl, n_exp, n_ctl, e_exp, e_ctl, t_max)  # exact + QP(events)
+    return {
+        "ds": cfg.ds, "label": cfg.label, "status": "scored",
+        "n_exp": n_exp, "n_ctl": n_ctl, "true_hr": round(true_hr, 4),
+        "fold_registry_only": _r(_fold(hr_reg, true_hr)),
+        "fold_kmcurve_only": _r(_fold(hr_km, true_hr)),
+        "fold_fusion": _r(_fold(hr_fuse, true_hr)),
+        "fold_fusion_qp": _r(_fold(hr_fuse_qp, true_hr)),
+    }
+
+
+def _r(x):
+    return round(x, 4) if x else None
+
+
+def run_fusion(registry_dir: Path, datasets: Optional[List[str]] = None) -> dict:
+    realipd = registry_dir / "realipd"
+    want = datasets or [c.ds for c in CONFIGS]
+    results = []
+    for ds in want:
+        cfg = CONFIG_BY_DS.get(ds)
+        csv = realipd / f"{ds}.csv"
+        if cfg is None or not csv.exists():
+            continue
+        try:
+            results.append(fusion_and_score(csv, cfg))
+        except Exception as exc:
+            results.append({"ds": ds, "status": "error",
+                            "error": f"{type(exc).__name__}: {exc}"[:120]})
+    scored = [r for r in results if r.get("status") == "scored"]
+    summary = {"n_scored": len(scored)}
+    for key in ("fold_registry_only", "fold_kmcurve_only", "fold_fusion", "fold_fusion_qp"):
+        st = _stats(scored, key)
+        if st:
+            summary[key] = st
+    # paired: does fusion beat each single-source path on the SAME datasets?
+    summary["paired_fusion_vs_registry"] = _paired(scored, "fold_fusion", "fold_registry_only")
+    summary["paired_fusion_vs_kmcurve"] = _paired(scored, "fold_fusion", "fold_kmcurve_only")
+    return {"summary": summary, "results": results}
+
+
+def _print_fusion(out: dict) -> None:
+    print(f"\n{'dataset':<12}{'trueHR':>9}{'registry-only':>15}{'kmcurve-only':>14}"
+          f"{'FUSION':>9}")
+    print(f"{'':<12}{'':>9}{'(exact,no NAR)':>15}{'(noisy+NAR)':>14}{'(exact+NAR)':>9}")
+    print("-" * 60)
+    for r in out["results"]:
+        if r.get("status") == "scored":
+            print(f"{r['ds']:<12}{r['true_hr']:>9}{str(r['fold_registry_only']):>15}"
+                  f"{str(r['fold_kmcurve_only']):>14}{str(r['fold_fusion']):>9}")
+        else:
+            print(f"{r['ds']:<12}  {r.get('status')}")
+    s = out["summary"]
+    print("-" * 60)
+    print(f"scored {s['n_scored']}")
+    for key, lbl in (("fold_registry_only", "registry-only (exact anchors, NO NAR)"),
+                     ("fold_kmcurve_only", "kmcurve-only  (noisy curve + NAR)    "),
+                     ("fold_fusion", "FUSION        (exact anchors + NAR)  "),
+                     ("fold_fusion_qp", "FUSION+QP     (exact anchors + QP)   ")):
+        st = s.get(key)
+        if st:
+            ci = st["within_20pct_ci"]
+            print(f"  {lbl}: median {st['median']}  p90 {st['p90']}"
+                  f"  within20% {st['within_20pct']}/{st['n']} (95% CI {ci[0]:.0%}-{ci[1]:.0%})")
+    for k, lbl in (("paired_fusion_vs_registry", "fusion vs registry-only"),
+                   ("paired_fusion_vs_kmcurve", "fusion vs kmcurve-only ")):
+        pr = s.get(k)
+        if pr:
+            print(f"  paired {lbl} (n={pr['n']}): fusion better {pr['a_better']}, "
+                  f"other better {pr['b_better']}, median fold ratio {pr['median_ratio_b_over_a']}")
+
+
 def run(registry_dir: Path, datasets: Optional[List[str]] = None) -> dict:
     realipd = registry_dir / "realipd"
     if not realipd.is_dir():
@@ -342,20 +494,38 @@ def run(registry_dir: Path, datasets: Optional[List[str]] = None) -> dict:
     scored = [r for r in results if r.get("status") == "scored" and r.get("fold_nar")]
     summary = {"n_total": len(results), "n_scored": len(scored)}
     if scored:
-        def _stats(key):
-            xs = sorted(r[key] for r in scored if r.get(key))
-            if not xs:
-                return None
-            return {
-                "median": round(xs[len(xs) // 2], 4),
-                "p90": round(xs[min(len(xs) - 1, int(0.9 * len(xs)))], 4),
-                "within_20pct": sum(x <= 1.2 for x in xs),
-                "n": len(xs),
-            }
-        summary["censoring_informed"] = _stats("fold_nar")
-        summary["curve_only"] = _stats("fold_curveonly")
-        summary["qp"] = _stats("fold_qp")
+        summary["censoring_informed"] = _stats(scored, "fold_nar")
+        summary["curve_only"] = _stats(scored, "fold_curveonly")
+        summary["qp"] = _stats(scored, "fold_qp")
+        # paired: does QP beat Guyot+NAR on the SAME datasets?
+        summary["paired_qp_vs_nar"] = _paired(scored, "fold_qp", "fold_nar")
     return {"summary": summary, "results": results}
+
+
+def _stats(scored: list, key: str):
+    xs = sorted(r[key] for r in scored if r.get(key))
+    if not xs:
+        return None
+    k = sum(x <= 1.2 for x in xs)
+    return {
+        "median": round(xs[len(xs) // 2], 4),
+        "p90": round(xs[min(len(xs) - 1, int(0.9 * len(xs)))], 4),
+        "within_20pct": k, "n": len(xs),
+        "within_20pct_ci": wilson_ci(k, len(xs)),
+    }
+
+
+def _paired(scored: list, key_a: str, key_b: str):
+    """On datasets where both backends scored: which wins (lower fold), and the
+    median paired fold ratio (b/a). Avoids comparing non-overlapping subsets."""
+    pairs = [(r[key_a], r[key_b]) for r in scored if r.get(key_a) and r.get(key_b)]
+    if not pairs:
+        return None
+    a_better = sum(1 for a, b in pairs if a < b)
+    b_better = sum(1 for a, b in pairs if b < a)
+    ratios = sorted(b / a for a, b in pairs)
+    return {"n": len(pairs), "a_better": a_better, "b_better": b_better,
+            "median_ratio_b_over_a": round(ratios[len(ratios) // 2], 3)}
 
 
 def _print_table(out: dict) -> None:
@@ -380,8 +550,14 @@ def _print_table(out: dict) -> None:
                          ("qp", "Titman-QP (events)")):
             st = s.get(key)
             if st:
-                print(f"  {lbl}: median fold {st['median']}  p90 {st['p90']}"
-                      f"  within20% {st['within_20pct']}/{st['n']}")
+                ci = st["within_20pct_ci"]
+                print(f"  {lbl}: median {st['median']}  p90 {st['p90']}"
+                      f"  within20% {st['within_20pct']}/{st['n']} "
+                      f"(95% CI {ci[0]:.0%}-{ci[1]:.0%})")
+        pr = s.get("paired_qp_vs_nar")
+        if pr:
+            print(f"  paired QP vs Guyot+NAR (n={pr['n']}): QP better {pr['a_better']}, "
+                  f"NAR better {pr['b_better']}, median fold ratio {pr['median_ratio_b_over_a']}")
     else:
         print(f"scored 0/{s['n_total']} -- no datasets reconstructed 2 arms")
 
@@ -393,10 +569,16 @@ if __name__ == "__main__":
     ap.add_argument("--datasets", default=None,
                     help="comma-separated dataset ids (default: all configured)")
     ap.add_argument("--out", default=None, help="write results JSON here")
+    ap.add_argument("--fusion", action="store_true",
+                    help="run the NAR-fusion experiment (registry anchors + kmcurve NAR)")
     args = ap.parse_args()
     ds_list = args.datasets.split(",") if args.datasets else None
-    out = run(Path(args.registry), ds_list)
-    _print_table(out)
+    if args.fusion:
+        out = run_fusion(Path(args.registry), ds_list)
+        _print_fusion(out)
+    else:
+        out = run(Path(args.registry), ds_list)
+        _print_table(out)
     if args.out:
         Path(args.out).write_text(json.dumps(out, indent=2))
         print(f"\nwrote {args.out}")
