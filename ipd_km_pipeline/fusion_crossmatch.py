@@ -81,52 +81,113 @@ def ncts_in_pdf(pdf: Path) -> List[str]:
     return sorted(found)
 
 
-def ctgov_km_info(nct: str, sleep: float = 0.2) -> dict:
-    """Does this NCT post a structured KM-estimate curve (+ an HR)? via ctgov v2."""
+def fetch_study(nct: str, sleep: float = 0.2) -> dict:
+    """Fetch + TRIM a ctgov v2 study to the survival outcome measures (title,
+    paramType, class titles, group count, HR analyses). Cached so re-detection
+    after a detector change never re-fetches. Returns a minimal dict in the same
+    shape `_km_from_study` parses."""
     data = _get(f"https://clinicaltrials.gov/api/v2/studies/{nct}")
     time.sleep(sleep)
     if data is None:
-        return {"nct": nct, "error": "fetch_failed"}
+        return {"error": "fetch_failed"}
     try:
         d = json.loads(data)
     except Exception:
-        return {"nct": nct, "error": "bad_json"}
-    return _km_from_study(d, nct)
+        return {"error": "bad_json"}
+    if not d.get("hasResults"):
+        return {"hasResults": False}
+    oms = (d.get("resultsSection", {}).get("outcomeMeasuresModule", {})
+           .get("outcomeMeasures", []))
+    keep = []
+    for om in oms:
+        title = om.get("title") or ""
+        if not any(k in title.lower() for k in _SURV_KW):
+            continue  # only survival measures carry the curve + HR; shrinks cache
+        keep.append({
+            "title": title, "paramType": om.get("paramType", ""),
+            "classes": [{"title": c.get("title", "")} for c in om.get("classes", [])],
+            "groups": [{} for _ in om.get("groups", [])],
+            "analyses": [{"paramType": a.get("paramType"), "paramValue": a.get("paramValue"),
+                          "ciLowerLimit": a.get("ciLowerLimit"), "ciUpperLimit": a.get("ciUpperLimit")}
+                         for a in (om.get("analyses") or [])],
+        })
+    return {"hasResults": True,
+            "resultsSection": {"outcomeMeasuresModule": {"outcomeMeasures": keep}}}
+
+
+# class titles that are SUBGROUP strata, not KM-curve timepoints (false positives)
+_SUBGROUP_KW = ("sex:", "race:", "age", "gender", "region", "ethnic", "subgroup",
+                "ecog", "stage:", "histolog", "mutation", "smoking", "weight",
+                "prior ", "baseline ", "country", "<", ">", "=", "male", "female")
+# paramTypes that are NOT a survival probability (a curve posts a probability/%)
+_NON_CURVE_PARAM = ("median", "mean", "geometric", "least squares", "hazard", "count")
+_TIME_RE = re.compile(r"(month|year|week|day|\bmo\b|\byr\b|\bwk\b|time\s*point|^\s*[\d.]+\s*$)",
+                      re.IGNORECASE)
+
+
+def _is_timepoint(class_title: str) -> bool:
+    """A KM-curve class is a TIME (e.g. 'Month 6', '12 months', '24'), NOT a
+    subgroup stratum (e.g. 'Sex: Male', 'Race: Caucasian')."""
+    t = (class_title or "").strip().lower()
+    if not t:
+        return True   # untitled classes in a probability measure are usually timepoints
+    if any(k in t for k in _SUBGROUP_KW):
+        return False
+    return bool(_TIME_RE.search(t))
 
 
 def _km_from_study(d: dict, nct: str) -> dict:
-    """Pure parse: detect a posted KM-estimate outcome (>=3 timepoint classes +
-    a survival-type title) and a posted HR in a ctgov v2 study dict."""
+    """Pure parse: detect a posted KM-estimate CURVE (a survival-probability
+    outcome with >=3 TIMEPOINT classes -- not a subgroup/median table) and a
+    posted HR (from any survival analysis in the trial)."""
     if not d.get("hasResults"):
         return {"nct": nct, "has_results": False}
     oms = (d.get("resultsSection", {}).get("outcomeMeasuresModule", {})
            .get("outcomeMeasures", []))
+    # any survival HR posted anywhere in the trial (the curve measure often
+    # differs from the measure carrying the HR analysis)
+    trial_hr = None
+    for om in oms:
+        if any(k in (om.get("title") or "").lower() for k in _SURV_KW):
+            for a in (om.get("analyses") or []):
+                if "hazard" in (a.get("paramType") or "").lower():
+                    trial_hr = {"value": a.get("paramValue"),
+                                "ci": [a.get("ciLowerLimit"), a.get("ciUpperLimit")]}
+                    break
+        if trial_hr:
+            break
     best = None
     for om in oms:
         title = (om.get("title") or "")
-        n_tp = len(om.get("classes", []))           # timepoint classes == curve points
+        param = (om.get("paramType") or "")
         is_surv = any(k in title.lower() for k in _SURV_KW)
-        hr = None
-        for a in (om.get("analyses") or []):
-            if "hazard" in (a.get("paramType") or "").lower():
-                hr = {"value": a.get("paramValue"),
-                      "ci": [a.get("ciLowerLimit"), a.get("ciUpperLimit")]}
-                break
-        if is_surv and n_tp >= 3:
-            cand = {"title": title[:80], "n_timepoints": n_tp, "param": om.get("paramType"),
-                    "hr": hr}
-            if best is None or n_tp > best["n_timepoints"] or (hr and not best.get("hr")):
+        is_curve_param = not any(k in param.lower() for k in _NON_CURVE_PARAM)
+        classes = om.get("classes", [])
+        n_tp = sum(1 for c in classes if _is_timepoint(c.get("title", "")))
+        n_groups = len(om.get("groups", []))
+        if is_surv and is_curve_param and n_tp >= 3 and n_groups >= 2:
+            cand = {"title": title[:80], "n_timepoints": n_tp, "param": param,
+                    "n_groups": n_groups, "hr": trial_hr}
+            if best is None or n_tp > best["n_timepoints"]:
                 best = cand
     return {"nct": nct, "has_results": True, "km": best}
+
+
+_CACHE_VERSION = 2  # bump when the cached study shape changes
 
 
 def _load_cache() -> dict:
     if CACHE.exists():
         try:
-            return json.loads(CACHE.read_text())
+            c = json.loads(CACHE.read_text())
+            if c.get("version") == _CACHE_VERSION:
+                return c
+            # stale schema: keep the expensive pdf->NCT map, drop ctgov entries
+            return {"version": _CACHE_VERSION,
+                    "pdf_ncts": c.get("pdf_ncts", {}), "nct_info": {}}
         except Exception:
             pass
-    return {"pdf_ncts": {}, "nct_info": {}}
+    return {"version": _CACHE_VERSION, "pdf_ncts": {}, "nct_info": {}}
 
 
 def run(corpus_dir: Path, limit: Optional[int] = None) -> dict:
@@ -146,36 +207,40 @@ def run(corpus_dir: Path, limit: Optional[int] = None) -> dict:
                 print(f"  scanned {new_pdfs} new PDFs for NCT ids...", flush=True)
     CACHE.write_text(json.dumps(cache))
 
-    # 2) ctgov KM info per unique NCT (cached).
+    # 2) trimmed ctgov study per unique NCT (cached as raw study, not a verdict,
+    #    so a detector change re-detects offline without re-fetching).
     pdf_ncts = {k: v for k, v in cache["pdf_ncts"].items() if k in {p.name for p in pdfs}}
     all_ncts = sorted({n for ns in pdf_ncts.values() for n in ns})
     new_ncts = 0
     for nct in all_ncts:
         if nct not in cache["nct_info"]:
-            cache["nct_info"][nct] = ctgov_km_info(nct)
+            cache["nct_info"][nct] = fetch_study(nct)
             new_ncts += 1
             if new_ncts % 10 == 0:
                 CACHE.write_text(json.dumps(cache))
                 print(f"  queried {new_ncts} new NCTs on ctgov...", flush=True)
     CACHE.write_text(json.dumps(cache))
 
-    # 3) rank fusion-ready candidates.
+    # 3) detect posted KM curves + rank fusion-ready candidates (offline).
     candidates = []
+    n_with_results = 0
+    for nct in all_ncts:
+        study = cache["nct_info"].get(nct, {})
+        if study.get("hasResults"):
+            n_with_results += 1
     for pdf_name, ncts in pdf_ncts.items():
         for nct in ncts:
-            info = cache["nct_info"].get(nct, {})
-            km = info.get("km")
+            km = _km_from_study(cache["nct_info"].get(nct, {}), nct).get("km")
             if km:
                 candidates.append({
                     "pdf": pdf_name, "nct": nct,
-                    "n_timepoints": km["n_timepoints"],
+                    "n_timepoints": km["n_timepoints"], "n_groups": km.get("n_groups"),
                     "posted_hr": (km.get("hr") or {}).get("value"),
                     "posted_ci": (km.get("hr") or {}).get("ci"),
                     "outcome": km["title"],
                 })
     # best first: has HR, then more timepoints
     candidates.sort(key=lambda c: (c["posted_hr"] is not None, c["n_timepoints"]), reverse=True)
-    n_with_results = sum(1 for n in all_ncts if cache["nct_info"].get(n, {}).get("has_results"))
     return {
         "n_pdfs": len(pdfs),
         "n_pdfs_with_nct": sum(1 for ns in pdf_ncts.values() if ns),
