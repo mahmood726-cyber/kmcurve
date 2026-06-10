@@ -48,7 +48,12 @@ def _iter_pdfs():
 def build_samples(exclude_text: bool):
     """One sample per plot box that yields a 2-arm weak mask. Grouped by figure."""
     figures = []  # list of (fig_id, [ (img,mask), ... ])
-    for pdf in _iter_pdfs():
+    pdfs = list(_iter_pdfs())
+    print(f"building weak masks from {len(pdfs)} corpus PDFs...", flush=True)
+    for i, pdf in enumerate(pdfs, 1):
+        if i % 25 == 0:
+            print(f"  ...{i}/{len(pdfs)} PDFs scanned, {len(figures)} usable figures so far",
+                  flush=True)
         try:
             cands = FL.locate_km_figures(str(pdf), require_caption=True)
         except Exception:
@@ -76,7 +81,7 @@ def build_samples(exclude_text: bool):
                 samples.append(WL.resize_sample(img, mask, 128, 160))
         if samples:
             figures.append((pdf.stem, samples))
-            print(f"[sample] {pdf.name}: {len(samples)} box(es)")
+            print(f"[sample] {pdf.name}: {len(samples)} box(es)", flush=True)
     return figures
 
 
