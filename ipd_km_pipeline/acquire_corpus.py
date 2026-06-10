@@ -31,10 +31,30 @@ DEFAULT_QUERY = '"kaplan-meier"[Body] AND randomized AND open access[filter]'
 _UA = "Mozilla/5.0 (KMcurve-corpus research)"
 
 
-def _get(url: str, timeout: int = 45) -> bytes:
+def _get(url: str, timeout: int = 45, retries: int = 4) -> bytes:
+    """Fetch with bounded exponential backoff. Local DNS resolution fails in
+    bursts under rapid-fire requests (getaddrinfo failed / Errno 11001), then
+    recovers; retrying turns those transient bursts into successes instead of
+    discarding a candidate PDF. A genuine 404/410 is NOT retried (it will never
+    succeed) -- only connection/DNS/5xx-class errors are."""
+    import urllib.error
+
     req = urllib.request.Request(url, headers={"User-Agent": _UA})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except urllib.error.HTTPError as exc:
+            # 404/410/403 are permanent for this URL; 429/5xx are worth retrying.
+            if exc.code in (404, 410, 403) or attempt == retries - 1:
+                raise
+            time.sleep(2 ** attempt)
+        except Exception:
+            # URLError (DNS/conn reset), timeout, etc. -- transient, back off.
+            if attempt == retries - 1:
+                raise
+            time.sleep(2 ** attempt)
+    raise RuntimeError("unreachable")  # loop always returns or raises
 
 
 def esearch_pmc(query: str, n: int, retstart: int = 0, retries: int = 4) -> List[str]:
