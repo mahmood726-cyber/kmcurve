@@ -266,6 +266,8 @@ def _axis_values(answer_axis: Dict[str, Any], axis: str) -> List[float]:
 def ingest_vlm_answer(
     gray: np.ndarray, plot, answer: Dict[str, Any], min_r2: float = 0.99,
     verify_agree: Optional[bool] = None,
+    external_max_time: Optional[float] = None,
+    at_risk_col_times: Optional[List[Tuple[float, float]]] = None,
 ) -> Tuple[AxisFit, AxisFit, Dict[str, Any]]:
     """Pair a structured VLM answer with classical-CV tick positions and fit.
 
@@ -302,9 +304,19 @@ def ingest_vlm_answer(
     }
     # lever 4: confidence that PREDICTS correctness (not just R^2), for the
     # auto-accept-vs-human-flag gate. verify_agree comes from the double-read.
+    # An external value cross-check (caption follow-up / at-risk times) can veto
+    # auto-accept -- the only thing that catches a correlated identical misread.
     from confidence import calibration_confidence
+    from axis_cross_check import cross_check_calibration
+    xcheck = None
+    if external_max_time is not None or at_risk_col_times is not None:
+        xcheck = cross_check_calibration(
+            x_fit, y_fit, meta, plot,
+            external_max_time=external_max_time, at_risk_col_times=at_risk_col_times)
+        meta["cross_check"] = xcheck
     meta["confidence"] = calibration_confidence(
-        meta, x_fit.r2, y_fit.r2, len(x_vals), len(y_vals), verify_agree=verify_agree)
+        meta, x_fit.r2, y_fit.r2, len(x_vals), len(y_vals),
+        verify_agree=verify_agree, cross_check=xcheck)
     return x_fit, y_fit, meta
 
 

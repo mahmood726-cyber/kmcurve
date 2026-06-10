@@ -313,3 +313,19 @@ deviation vs reference over the box, normalised):
 - **Deferred:** mapping the score to a true probability (vs ranking) needs the
   labelled corpus (lever 2). v1 validates DISCRIMINATION, which is what the
   auto-accept gate requires.
+
+### External cross-check closes lever 4's blind spot — 2026-06-10
+
+`axis_cross_check.py::cross_check_calibration` adds the INDEPENDENT value source
+that confidence alone lacks: it compares the calibrated x-max against the
+caption's reported follow-up (`caption_max_followup`) and/or the at-risk-table
+column times, and the y-span against the axis scale. An external contradiction
+VETOES `auto_accept` regardless of confidence (threaded through
+`ingest_vlm_answer` → `calibration_confidence(cross_check=...)`); checks with no
+available reference are skipped (never assumed-pass).
+
+Validation (`validate_confidence.py`): the correlated-misread blind spot
+(`x_scale_1.2`, err 0.195) goes from **auto-accept 1.00 → 0.00** once a caption /
+at-risk follow-up reference is supplied. This ties the safeguard into the
+at-risk OCR already in the raster pipeline and the figure caption from
+`figure_locator`. Tests: +5 (`test_axis_cross_check.py`); suite 20/20.

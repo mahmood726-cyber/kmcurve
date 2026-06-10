@@ -61,7 +61,8 @@ def _corrupt(ans, kind):
     return a
 
 
-KINDS = ["correct", "wrong_scale", "y_kind_other", "verify_fail", "x_scale_1.2"]
+KINDS = ["correct", "wrong_scale", "y_kind_other", "verify_fail",
+         "x_scale_1.2", "x_scale_1.2+xcheck"]
 
 
 def main():
@@ -90,11 +91,17 @@ def main():
                 rx, ry, _ = VC.ingest_vlm_answer(g, box, r["read1"], verify_agree=True)
             except Exception:
                 continue  # only references that calibrate cleanly are usable
+            ref_max_time = max(rx.value(box.x0), rx.value(box.x1))  # true x horizon
             for kind in KINDS:
-                ans = r["read1"] if kind in ("correct", "verify_fail") else _corrupt(r["read1"], kind)
-                va = False if kind == "verify_fail" else True
+                base = "x_scale_1.2" if kind.startswith("x_scale_1.2") else kind
+                ans = r["read1"] if base in ("correct", "verify_fail") else _corrupt(r["read1"], base)
+                va = False if base == "verify_fail" else True
+                # supply the external reference (caption/at-risk follow-up) only
+                # for the +xcheck variant, to show it closes the blind spot
+                ext = ref_max_time if kind == "x_scale_1.2+xcheck" else None
                 try:
-                    xf, yf, meta = VC.ingest_vlm_answer(g, box, ans, verify_agree=va)
+                    xf, yf, meta = VC.ingest_vlm_answer(g, box, ans, verify_agree=va,
+                                                        external_max_time=ext)
                 except Exception:
                     rows.append({"id": e["id"], "kind": kind, "rejected": True,
                                  "conf": 0.0, "auto": False, "err": None})
@@ -134,13 +141,17 @@ def main():
         fa = np.mean([1.0 if x["auto"] else 0.0 for x in detectable])
         tp = np.mean([1.0 if x["auto"] else 0.0 for x in correct])
         print(f"auto-accept: correct={tp:.2f}  detectable-corruptions={fa:.2f} (want 0)")
+    xchecked = [x for x in rows if x["kind"] == "x_scale_1.2+xcheck"]
     if blind:
         ba = np.mean([1.0 if x["auto"] else 0.0 for x in blind])
         be = np.mean([x["err"] for x in blind if x["err"] is not None])
         print(f"\nBLIND SPOT (correlated identical misread, x_scale_1.2): "
-              f"auto-accept={ba:.2f} at mean_err={be:.3f} -- confidence CANNOT catch a "
-              f"misread both readers make identically + that stays linear & plausible. "
-              f"Documented limit; needs an external value cross-check (at-risk table / caption).")
+              f"auto-accept={ba:.2f} at mean_err={be:.3f} -- confidence ALONE cannot catch "
+              f"a misread both readers make identically + that stays linear & plausible.")
+        if xchecked:
+            xa = np.mean([1.0 if x["auto"] else 0.0 for x in xchecked])
+            print(f"  + external cross-check (caption/at-risk follow-up): "
+                  f"auto-accept={xa:.2f} -- the external value source CLOSES the blind spot.")
 
     (ROOT / "confidence_validation.json").write_text(json.dumps(rows, indent=2))
     print(f"\n-> {ROOT/'confidence_validation.json'}")

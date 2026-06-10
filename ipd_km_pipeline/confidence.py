@@ -116,13 +116,20 @@ def calibration_confidence(
     n_ticks_y: int,
     verify_agree: Optional[bool] = None,
     threshold: float = _AUTO_ACCEPT_THRESHOLD,
+    cross_check: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Predict whether a raster calibration is correct. Returns
-    ``{confidence, auto_accept, components}``.
+    ``{confidence, auto_accept, components, cross_check_veto}``.
 
     ``verify_agree`` is True/False when two independent VLM reads were compared
     (the workflow / API double-read path), or None when only a single read is
     available (then the verify signal is neutral-ish, never full credit).
+
+    ``cross_check`` is an ``axis_cross_check.cross_check_calibration`` result. If
+    it reports an external inconsistency (``consistent`` False), auto_accept is
+    VETOED regardless of confidence -- an external value contradiction outranks an
+    internally-consistent fit (this is the only thing that catches a correlated
+    identical misread).
     """
     if verify_agree is None:
         verify = 0.65          # single read: unknown -> neutral, capped below 1
@@ -142,9 +149,12 @@ def calibration_confidence(
         conf *= max(comps[k], 1e-6) ** w
     conf = round(conf, 4)
 
+    cross_veto = bool(cross_check is not None and not cross_check.get("consistent", True))
     auto_accept = bool(
         conf >= threshold
         and min(n_ticks_x, n_ticks_y) >= _MIN_TICKS_FOR_AUTO
         and (verify_agree is not False)        # an explicit disagreement never auto-accepts
+        and not cross_veto                      # an external value contradiction vetoes
     )
-    return {"confidence": conf, "auto_accept": auto_accept, "components": comps}
+    return {"confidence": conf, "auto_accept": auto_accept, "components": comps,
+            "cross_check_veto": cross_veto}
