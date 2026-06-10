@@ -37,13 +37,24 @@ def _get(url: str, timeout: int = 45) -> bytes:
         return r.read()
 
 
-def esearch_pmc(query: str, n: int, retstart: int = 0) -> List[str]:
+def esearch_pmc(query: str, n: int, retstart: int = 0, retries: int = 4) -> List[str]:
     from urllib.parse import quote_plus
 
     url = (f"{EUTILS}/esearch.fcgi?db=pmc&term={quote_plus(query)}"
            f"&retmax={n}&retstart={retstart}&retmode=json&sort=relevance")
-    data = json.loads(_get(url))
-    return data.get("esearchresult", {}).get("idlist", [])
+    # Bounded backoff: a transient blip on the page fetch must not kill a
+    # multi-hour resumable acquisition run.
+    for attempt in range(retries):
+        try:
+            data = json.loads(_get(url))
+            return data.get("esearchresult", {}).get("idlist", [])
+        except Exception as exc:
+            if attempt == retries - 1:
+                print(f"  esearch failed at retstart={retstart} "
+                      f"after {retries} tries: {type(exc).__name__}")
+                return []
+            time.sleep(2 ** attempt)  # 1, 2, 4 s
+    return []
 
 
 def fetch_pdf(pmcid: str, dest: Path) -> Optional[Path]:
@@ -177,32 +188,64 @@ def acquire_biorxiv(query: str, n: int, out_dir: Path, sleep: float = 0.34) -> d
     return manifest
 
 
-def acquire(query: str, n: int, out_dir: Path, sleep: float = 0.34) -> dict:
+def acquire(query: str, n: int, out_dir: Path, sleep: float = 0.34,
+            page: int = 200, flush_every: int = 5) -> dict:
+    """Acquire up to ``n`` NEW PMC OA PDFs, paginating the relevance-sorted
+    esearch via ``retstart`` so the corpus can grow to thousands across
+    resumable runs (the manifest's ``pmcid`` set dedups, so a re-run walks past
+    everything already on disk). The manifest is flushed every ``flush_every``
+    new PDFs, so an interrupted multi-hour run keeps what it acquired."""
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = out_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"pdfs": []}
     have = {e["pmcid"] for e in manifest["pdfs"]}
 
-    ids = esearch_pmc(query, n * 4)  # over-fetch; not all render a PDF
+    # Reconcile: adopt any PMC*.pdf already on disk but missing from the manifest
+    # (recovers PDFs from a run killed before its last flush, so they are never
+    # re-downloaded). Filenames are written as PMC<id>.pdf by fetch_pdf().
+    adopted = 0
+    for p in sorted(out_dir.glob("PMC*.pdf")):
+        pmcid = p.stem[3:]  # strip "PMC"
+        if pmcid and pmcid not in have:
+            manifest["pdfs"].append({"pmcid": pmcid, "pdf": p.name})
+            have.add(pmcid)
+            adopted += 1
+    if adopted:
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+        print(f"  reconciled {adopted} orphan PDF(s) into manifest")
+
     got, skipped = 0, {"no_pdf": 0, "error": 0, "dup": 0}
-    for pmcid in ids:
-        if got >= n:
+    retstart = 0
+    since_flush = 0
+    while got < n:
+        ids = esearch_pmc(query, page, retstart=retstart)  # next page
+        if not ids:
+            print(f"  esearch exhausted at retstart={retstart}")
             break
-        if pmcid in have:
-            skipped["dup"] += 1
-            continue
-        try:
-            pdf = fetch_pdf(pmcid, out_dir)
-            time.sleep(sleep)
-            if pdf is None:
-                skipped["no_pdf"] += 1
+        retstart += len(ids)
+        for pmcid in ids:
+            if got >= n:
+                break
+            if pmcid in have:
+                skipped["dup"] += 1
                 continue
-            manifest["pdfs"].append({"pmcid": pmcid, "pdf": pdf.name})
-            got += 1
-            print(f"  [{got}/{n}] PMC{pmcid}  {pdf.stat().st_size // 1024} KB")
-        except Exception as exc:
-            skipped["error"] += 1
-            print(f"  skip PMC{pmcid}: {type(exc).__name__}: {exc}")
+            have.add(pmcid)  # don't re-attempt within this run
+            try:
+                pdf = fetch_pdf(pmcid, out_dir)
+                time.sleep(sleep)
+                if pdf is None:
+                    skipped["no_pdf"] += 1
+                    continue
+                manifest["pdfs"].append({"pmcid": pmcid, "pdf": pdf.name})
+                got += 1
+                since_flush += 1
+                print(f"  [{got}/{n}] PMC{pmcid}  {pdf.stat().st_size // 1024} KB")
+                if since_flush >= flush_every:
+                    manifest_path.write_text(json.dumps(manifest, indent=2))
+                    since_flush = 0
+            except Exception as exc:
+                skipped["error"] += 1
+                print(f"  skip PMC{pmcid}: {type(exc).__name__}: {exc}")
     manifest_path.write_text(json.dumps(manifest, indent=2))
     print(f"\nacquired {got} new PDFs (total {len(manifest['pdfs'])}); skipped {skipped}")
     return manifest
