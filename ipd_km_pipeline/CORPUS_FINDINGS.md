@@ -562,3 +562,20 @@ data. (Honest link: events taken from the AACT harvest; kmcurve OCRs the identic
 "N (events)" totals from the figure in production. The RADIANT-4 Lancet primary
 isn't OA here, so the figure-OCR step is exercised separately by the corpus
 benchmark.) +1 test (`test_fusion_real_trial.py`).
+
+**Why the fully-OA end-to-end demo is hard: a measured OPEN-ACCESS GAP.** Two
+scans quantify it from both directions. `fusion_crossmatch.py` (figure→registry):
+of 327 OA corpus PDFs, 185 cite an NCT → 267 unique NCTs → 37 with posted ctgov
+results → **0** with a structured 2-arm KM curve. `fusion_pairfinder.py`
+(registry→figure, over registry-ipd's 30 curve+HR gallery trials): 25 link a
+primary publication but **0 have an open-access PRIMARY in PMC** (27/30 have *some*
+OA paper citing the NCT, but they are reviews/secondary analyses without the
+matching 2-arm figure + at-risk table). The trials that post structured registry
+curves are predominantly industry RCTs whose primaries are paywalled, while the OA
+literature citing them lacks the figure — **the two sources are anti-correlated on
+openness.** So the end-to-end real-figure fusion is bounded by data *access*, not
+capability (this is exactly why `fusion_real_trial.py` takes RADIANT-4's event
+count from the AACT harvest rather than OCR-ing the paywalled Lancet figure), and
+it is a direct, quantified reinforcement of registry-ipd's POLICY.md ask. Both
+scans are cached/incremental — re-run as the corpus grows or OA status changes.
++9 tests (`test_fusion_crossmatch.py`, `test_fusion_pairfinder.py`).

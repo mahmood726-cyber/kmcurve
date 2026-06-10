@@ -93,3 +93,4 @@ sentinel-findings.jsonl
 sentinel-findings.md
 ipd_km_pipeline/.fusion_crossmatch_cache.json
 ipd_km_pipeline/fusion_candidates.json
+ipd_km_pipeline/.fusion_pairfinder_cache.json
