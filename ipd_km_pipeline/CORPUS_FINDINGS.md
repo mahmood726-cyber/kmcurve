@@ -270,3 +270,46 @@ edges, so naive edge-anchoring is unsafe. Treat this as a hard floor unless a
 geometric anchor can be made unambiguous; do NOT relax the count-match gate
 (linear degeneracy → silent miscalibration). Higher-recall tick detection
 (lower projection threshold with a spurious-peak guard) is the safer lever.
+
+## Calibrated confidence (lever 4) — 2026-06-10
+
+`confidence.py::calibration_confidence` predicts whether a calibration is
+CORRECT (not just its R²), for the auto-accept-vs-human-flag gate. R² is a weak
+predictor on its own (the linear degeneracy: any in-order alignment of arithmetic
+values to evenly-spaced positions scores R²=1). The predictive signals are, by
+weight: **verify-agreement** (two independent VLM reads agree — 0.35),
+**tick count** (≥4 arithmetic ticks make a misread non-collinear so RANSAC drops
+it — 0.30), **semantic plausibility** (survival/CI y in [0,1]/[0,100] spanning
+most of the axis; time x from ~0; scale-consistency: percent↔~100, proportion↔~1
+— 0.25), and an **R² floor** (0.10). Combined via weighted geometric mean +
+an `auto_accept` gate (conf ≥ 0.80, ≥4 ticks, verify not False). Surfaced in
+`ingest_vlm_answer` meta.
+
+**Validation** (`validate_confidence.py` — perturbation study on the 5 verified
+pilot calibrations as correct references; reconstruction error = max fit
+deviation vs reference over the box, normalised):
+
+| perturbation | mean conf | auto-accept | mean err |
+|---|---|---|---|
+| correct | 1.000 | 100% | 0.000 |
+| wrong_scale (toggle is_percent) | 0.610 | 0% | 0.000* |
+| verify_fail (reads disagree) | 0.515 | 0% | 0.000* |
+| y_kind_other | 0.861 | 100% | 0.000 |
+| x_scale_1.2 (correlated misread) | 1.000 | 100% | 0.195 |
+
+- **Discrimination = 1.000** (correct always out-scores fit-corrupting
+  perturbations); auto-accept precision: correct 100%, wrong_scale/verify_fail 0%.
+- **verify-agreement is the workhorse** — the double-read is what makes
+  auto-accept safe; a disagreement alone forces a human flag.
+- **Honest limits.** (1) The fit-error proxy is 0 for `wrong_scale`/`verify_fail`
+  because they corrupt the *scale/semantics*, not the fit slope — confidence
+  still catches them via the scale-consistency + verify signals. (2) `y_kind_other`
+  yields a correct FIT (err=0) — a semantic mislabel, not a calibration error. (3)
+  **Blind spot:** a *correlated identical misread* that stays linear and plausible
+  (`x_scale_1.2`, err=0.195) is uncatchable by confidence. Catching it needs an
+  EXTERNAL value cross-check — the at-risk-table baseline N or the caption's
+  follow-up time — which is the natural next safeguard (and ties into the at-risk
+  OCR already in the raster pipeline).
+- **Deferred:** mapping the score to a true probability (vs ranking) needs the
+  labelled corpus (lever 2). v1 validates DISCRIMINATION, which is what the
+  auto-accept gate requires.

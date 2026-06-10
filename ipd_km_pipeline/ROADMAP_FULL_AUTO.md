@@ -64,6 +64,19 @@ flips circrep's reconstructed events).
    confidence against actual error on lever 2's corpus. This is what makes
    "confidence-gated auto" trustworthy at scale.
 
+   **STATUS (2026-06-10): shipped (discrimination validated).**
+   `confidence.py::calibration_confidence` scores from verify-agreement (0.35) +
+   tick count (0.30) + semantic plausibility incl. scale-consistency (0.25) +
+   R^2 floor (0.10) -> weighted geometric mean + `auto_accept` gate; surfaced in
+   `ingest_vlm_answer` meta. `validate_confidence.py` perturbation study:
+   **discrimination=1.000**, auto-accept precision correct=100% /
+   wrong-scale=0% / verify-disagree=0%. Blind spot (quantified): a CORRELATED
+   identical misread that stays linear+plausible (err 0.195, conf 1.0) is
+   uncatchable -> needs an EXTERNAL value cross-check (at-risk N / caption
+   follow-up), the natural next safeguard. Probability calibration (vs ranking)
+   deferred to lever 2's labelled corpus. See CORPUS_FINDINGS.md -> "Calibrated
+   confidence".
+
 ## Also queued (smaller)
 
 - Speed up the benchmark: dedup/vectorise per-panel Tesseract tick OCR (RapidOCR
