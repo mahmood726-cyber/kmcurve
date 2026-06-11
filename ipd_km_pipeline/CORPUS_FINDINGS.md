@@ -828,3 +828,32 @@ wall: (a) the registry-only mechanism validation already done at strong separati
 `fusion_real_trial.py`); (b) a ctgov-search → PMID → PMC-OA *forward* pairfinder targeting strong-HR 2-arm
 trials whose primary is OA. Reproduce: `python fusion_crossmatch.py --corpus corpus_pmc --out
 fusion_candidates.json` (reads `best_validation_target`).
+
+## Forward finder: the figure wall is TOTAL for strong-effect trials — abstracts are the way through — 2026-06-11
+
+`fusion_forward_finder.py` inverts the search (ctgov → trial → OA primary, vs the corpus's PDF → NCT):
+search ctgov directly for results-posting RCTs, keep 2-arm posted curves with a strongly-separated
+endpoint-matched HR (|log HR| ≥ 0.4), then RESULT-PMID → PMC-OA → verify the figure extracts. (Search
+gotcha: `"hazard ratio"` is NOT in ctgov's text index — `query.term="overall survival hazard ratio"`
+returns 93 vs `"overall survival"` 9308; search the indexed survival term, detect the HR client-side.)
+
+**Scanned 1500 phase-3 OS trials → 7 strongly-separated 2-arm posted curves → 0 with an OA primary in PMC
+→ 0 figure-extractable.** The 7 (all with registry curve anchors): NCT02511106 DFS **0.23**, NCT04737187 /
+NCT01721772 PFS 0.44, NCT02586025 EFS 0.53, NCT01144364 DFS 0.58, NCT04305496 PFS 0.60, NCT00699816 RFS
+0.63. Every one's primary is paywalled. **The figure wall is total for strong-effect confirmatory RCTs** —
+their primaries are industry-sponsored and closed; only correspondence/subgroup/review papers are OA.
+
+**The way through — the PubMed-abstract event-count lever (idea from registry-ipd `KMCURVE-SYNERGY.md` +
+`harvest/abstract_events.py`).** The QP fusion needs a per-arm total-event count, not the figure; the
+trial's PubMed **abstract is free even when the primary is paywalled** and often prints it ("death occurred
+in 107 of 205 … versus 77 of 97 …"). registry-ipd built + validated this (RADIANT-4: abstract→count→QP
+moves HR 0.679→0.577, into the posted CI vs truth 0.48; 100% precision on 161 abstracts).
+
+**Honest recall caveat (measured here):** on these 7 strong trials the count-lever mostly does NOT fire —
+abstracts report event **percentages** ("11% vs 46% had disease recurrence or death", ADAURA) or only the
+HR, not "X of N" counts. So the lever needs (a) a correct primary-PMID resolver (ctgov references often
+list a *reply/comment*, not the results paper — `result_pmid` picked PMID 33596365, an NEJM Reply, for
+ADAURA), and (b) a **percentage→count extension** (events ≈ rate × registry-N, endpoint-scoped) to lift
+recall, since abstracts post rates far more often than counts. That extension is the well-scoped next
+build; the count-only lever alone is near-zero-recall on the strong-trial set. Reproduce:
+`python fusion_forward_finder.py --query "overall survival" --max-ncts 1500 --min-sep 0.4`.
