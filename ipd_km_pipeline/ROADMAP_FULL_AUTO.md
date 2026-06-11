@@ -4,6 +4,36 @@ Goal: push the raster path from semi-auto (auto where confident, 2-click else)
 toward **confidence-gated full-auto** -- fully automatic on the figures it is
 confident about, human only on the flagged minority. NOT chasing literal 100%.
 
+## Session status — 2026-06-11 (handoff)
+
+- **Corpus: 1500 PMC OA PDFs** (was ~58). `acquire_corpus.py` hardened across the
+  session and now robust to every failure mode it hit: pagination via retstart,
+  bounded retry/backoff, orphan-reconcile, **wall-clock fetch deadline**,
+  fast-skip-on-timeout, **persistent `no_pdf` blacklist** (durably flushed),
+  **atomic manifest writes**, and a **single-writer lock** (no two writers race
+  the manifest). Gotcha: on Windows `TaskStop` may NOT kill a backgrounded python
+  child -- verify with WMI + `Stop-Process` by PID; never run two acquisitions.
+- **Lever 3 (the data gate): cracking.** Yield scales linearly ~16% (9 figures at
+  58 PDFs -> 82 at 500 -> ~240 projected at 1500). Held-out arm-IoU 0.00 (8 figs)
+  -> 0.073 (66 figs); the full-1500 baseline run is finishing as of this writing.
+  `train_on_figures.py` now has an **incremental sample cache** (build once,
+  retrain instantly) + **converging training** (cosine LR + best-checkpoint;
+  the old fixed lr=1e-2 oscillated). NEXT: compare 1500-data baseline (old
+  training) vs improved training on the same cache to separate the data gate from
+  the training gate; then hand-verified masks on hard (coloured/overlapping) figs.
+- **NAR fusion (cross-project, with `C:\Projects\registry-ipd`): mechanism
+  PROVEN.** registry-ipd has the exact curve but no number-at-risk; kmcurve OCRs
+  the at-risk table but the curve is pixel-noisy -- fusing them beats either alone
+  (42 datasets median 1.05; RADIANT-4 real trial: registry-only HR 0.83 *outside*
+  the posted CI -> fusion 0.56 *inside* it). QP backend ported (beats Guyot) and
+  wired into production (opt-in `KM_QP_BACKEND=1`). Fully-OA end-to-end is bounded
+  by an **open-access gap** (measured both ways: 0/327 OA PDFs post a ctgov curve;
+  0/30 curve-posting trials have an OA primary). See `CORPUS_FINDINGS.md` +
+  `registry-ipd/FUSION.md`. Tools: `realipd_benchmark.py`, `qp_reconstruct.py`,
+  `fusion_real_trial.py`, `fusion_crossmatch.py`, `fusion_pairfinder.py`.
+- Suite: 74 unit tests green (`python -m pytest` in ipd_km_pipeline; conftest
+  excludes 4 arg-driven CLI scripts).
+
 ## Honest success odds (assessment 2026-06-09)
 
 | target | estimate |
