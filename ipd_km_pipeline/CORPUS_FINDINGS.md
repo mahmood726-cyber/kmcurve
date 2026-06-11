@@ -648,23 +648,29 @@ from pdfplumber to **PyMuPDF/fitz (~1.3s vs ~15s per PDF, ~10× faster; identica
 | PDFs citing an NCT | 185 | 373 | **803** |
 | unique NCTs | 267 | 592 | **1297** |
 | NCTs with posted results | 37 | 106 | **254** |
-| dual-available candidates | 0 | 2 | **6** |
-| …**of which post a hazard ratio** | 0 | 0 | **4** |
+| NCT-citation candidates | 0 | 2 | **6** |
+| …**fusion-USABLE** (PDF is the primary + has an at-risk table) | 0 | 2 | **3** |
+| …**usable AND posts a hazard ratio** | 0 | 0 | **1** |
 
-| PDF | NCT | outcome | tpts | posted HR (95% CI) |
-|---|---|---|---:|---|
-| PMC9893404 | NCT00636168 | **Overall Survival** | 6 | **0.75 (0.64–0.90)** |
-| PMC9662922 | NCT01942135 | Survival probability | 3 | 0.42 (0.32–0.56) |
-| PMC9487257 | NCT01121393 | Time to Objective Response¹ | 14 | 0.28 (0.20–0.39) |
-| PMC9487257 | NCT01466660 | Time to Objective Response¹ | 7 | 0.82 (0.66–1.03) |
-| PMC7530824 | NCT01658878 | OS rate | 5 | — |
-| PMC13006393 | NCT03110107 | PFS rate | 3 | — |
+**Correction (and a crossmatch fix).** A first pass over 1500 PDFs reported "6 candidates, 4 with an HR"
+and flagged `NCT00636168` (HR 0.75) as a clean validation-grade pair. **Verifying the PDFs refuted that**:
+`PMC9893404` is a *network meta-analysis* that merely **cites** NCT00636168 (17 cited NCTs, 26 NMA
+signals, **no at-risk table**) — it does not contain the trial's KM figure. The cross-match's
+NCT-citation test cannot tell a primary from a review, so it was over-counting. Added `classify_pdf`
+(likely-primary = ≤3 cited NCTs and not an NMA, AND an at-risk table present) and a `fusion_usable` flag.
 
-**The 0→2→6 trajectory (and 0→0→4 with a posted HR) confirms the bottleneck was corpus size, not
-capability.** `NCT00636168` (OS curve, 6 timepoints, **HR 0.75**, OA figure PMC9893404) is the first clean
-**2-arm survival + posted-HR + open-access-figure** pair — held-out ground truth for an end-to-end NAR
-fusion: harvest the registry anchors, OCR the figure's at-risk table, reconstruct, and score the
-reconstructed HR against the posted 0.75. ¹The two "Time to Objective Response" rows are response-time
-curves matched via the "time to" keyword — genuine time-to-event curves with HRs, but not survival, so
-treat them as fusion *mechanism* demos rather than survival validation. Reproduce:
+| PDF | NCT | outcome | tpts | posted HR | usable? |
+|---|---|---|---:|---|:--:|
+| **PMC9662922** | **NCT01942135** | **Survival probability** | 3 | **0.42 (0.32–0.56)** | ✅ primary + at-risk |
+| PMC7530824 | NCT01658878 | OS rate | 5 | — | ✅ primary + at-risk, no HR |
+| PMC13006393 | NCT03110107 | PFS rate | 3 | — | ✅ primary + at-risk, no HR |
+| PMC9893404 | NCT00636168 | OS rate | 6 | 0.75 | ❌ NMA citing the trial |
+| PMC9487257 | NCT01121393/466660 | Time to response | 14/7 | 0.28/0.82 | ❌ review, no at-risk |
+
+So the honest count at 1500 PDFs is **3 fusion-usable primaries with an at-risk table, exactly 1 of which
+posts a hazard ratio**: **`NCT01942135` / `PMC9662922`** (survival-probability curve, posted HR 0.42, OA
+primary with an at-risk table) is the first genuinely usable **curve + HR + figure** pair — held-out
+ground truth for an end-to-end NAR fusion. The bottleneck was corpus size *and* primary-vs-review
+filtering; both now addressed. The narrower count also re-confirms the open-access gap (most HR-posting
+trials' OA mentions are reviews, not primaries). Reproduce:
 `python fusion_crossmatch.py --corpus corpus_pmc --out fusion_candidates.json`.

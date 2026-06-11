@@ -92,6 +92,32 @@ def ncts_in_pdf(pdf: Path) -> List[str]:
     return sorted(found)
 
 
+_NMA_RE = re.compile(r"network meta|meta-analysis|systematic review|\bSUCRA\b", re.IGNORECASE)
+_ATRISK_RE = re.compile(r"(?:no\.?|number|patients?|subjects?|n)\s*at\s*risk|\bat\s*risk\b", re.IGNORECASE)
+
+
+def classify_pdf(pdf: Path) -> dict:
+    """Distinguish a trial's PRIMARY publication (2-arm KM figure + at-risk table) from a review/NMA that
+    merely CITES the NCT. The cross-match's NCT-citation test cannot tell them apart -- so a candidate is
+    only fusion-USABLE if its PDF is a likely-primary (few cited NCTs, not an NMA) AND contains an at-risk
+    table. Without this, an NMA citing 17 trials looks like 17 fusion pairs but has none of their figures."""
+    found, txt = set(), ""
+    try:
+        import fitz
+        with fitz.open(pdf) as doc:
+            for page in doc:
+                t = page.get_text() or ""
+                txt += t
+                found.update(_NCT.findall(t))
+    except Exception:
+        return {"n_ncts": None, "nma_signals": None, "has_at_risk": None, "likely_primary": None, "fusion_usable": None}
+    nma = len(_NMA_RE.findall(txt))
+    at_risk = bool(_ATRISK_RE.search(txt))
+    primary = len(found) <= 3 and nma < 3
+    return {"n_ncts": len(found), "nma_signals": nma, "has_at_risk": at_risk,
+            "likely_primary": primary, "fusion_usable": bool(primary and at_risk)}
+
+
 def fetch_study(nct: str, sleep: float = 0.2) -> dict:
     """Fetch + TRIM a ctgov v2 study to the survival outcome measures (title,
     paramType, class titles, group count, HR analyses). Cached so re-detection
@@ -239,25 +265,34 @@ def run(corpus_dir: Path, limit: Optional[int] = None) -> dict:
         study = cache["nct_info"].get(nct, {})
         if study.get("hasResults"):
             n_with_results += 1
+    pdf_class = {}   # classify each candidate PDF once (primary-with-figure vs review/NMA)
     for pdf_name, ncts in pdf_ncts.items():
         for nct in ncts:
             km = _km_from_study(cache["nct_info"].get(nct, {}), nct).get("km")
             if km:
+                if pdf_name not in pdf_class:
+                    pdf_class[pdf_name] = classify_pdf(corpus_dir / pdf_name)
+                cls = pdf_class[pdf_name]
                 candidates.append({
                     "pdf": pdf_name, "nct": nct,
                     "n_timepoints": km["n_timepoints"], "n_groups": km.get("n_groups"),
                     "posted_hr": (km.get("hr") or {}).get("value"),
                     "posted_ci": (km.get("hr") or {}).get("ci"),
                     "outcome": km["title"],
+                    "pdf_likely_primary": cls["likely_primary"], "pdf_has_at_risk": cls["has_at_risk"],
+                    "fusion_usable": cls["fusion_usable"],
                 })
-    # best first: has HR, then more timepoints
-    candidates.sort(key=lambda c: (c["posted_hr"] is not None, c["n_timepoints"]), reverse=True)
+    # best first: FUSION-USABLE (primary + at-risk table), then has HR, then more timepoints
+    candidates.sort(key=lambda c: (bool(c["fusion_usable"]), c["posted_hr"] is not None, c["n_timepoints"]), reverse=True)
+    usable = [c for c in candidates if c["fusion_usable"]]
     return {
         "n_pdfs": len(pdfs),
         "n_pdfs_with_nct": sum(1 for ns in pdf_ncts.values() if ns),
         "n_unique_ncts": len(all_ncts),
         "n_ncts_with_results": n_with_results,
         "n_fusion_candidates": len(candidates),
+        "n_fusion_usable": len(usable),
+        "n_usable_with_hr": sum(1 for c in usable if c["posted_hr"] is not None),
         "candidates": candidates,
     }
 
