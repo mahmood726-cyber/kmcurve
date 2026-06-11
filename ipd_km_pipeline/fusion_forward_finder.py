@@ -40,12 +40,19 @@ CACHE = Path(__file__).resolve().parent / ".fusion_forward_cache.json"
 _SEARCH = "https://clinicaltrials.gov/api/v2/studies"
 
 
-def search_ncts(query: str, max_ncts: int, page_size: int = 100) -> List[str]:
-    """NCT ids of results-posting studies matching `query`, paged (results:with)."""
+def search_ncts(query: str, max_ncts: int, page_size: int = 100,
+                agg: str = "results:with,phase:3") -> List[str]:
+    """NCT ids of results-posting studies matching `query`, paged.
+
+    NB: do NOT put "hazard ratio" in `query.term` -- it is not in ctgov's
+    searchable text index, so it collapses the result count (e.g. 'overall
+    survival hazard ratio' -> 93 vs 'overall survival' -> 9308). Search on the
+    indexed survival term and let the client-side `_km_from_study` /
+    `_hr_separation` filter to a posted 2-arm curve with a strong HR."""
     ncts: List[str] = []
     token = None
     while len(ncts) < max_ncts:
-        params = {"query.term": query, "aggFilters": "results:with",
+        params = {"query.term": query, "aggFilters": agg,
                   "fields": "NCTId", "pageSize": str(min(page_size, max_ncts - len(ncts)))}
         if token:
             params["pageToken"] = token
@@ -78,9 +85,9 @@ def _load_cache() -> dict:
 
 
 def run(query: str, max_ncts: int, min_sep: float, corpus_dir: Path,
-        verify_figures: bool = True) -> dict:
+        verify_figures: bool = True, agg: str = "results:with,phase:3") -> dict:
     cache = _load_cache()
-    ncts = search_ncts(query, max_ncts)
+    ncts = search_ncts(query, max_ncts, agg=agg)
     print(f"ctgov search -> {len(ncts)} results-posting studies", flush=True)
 
     # 1) detect a posted 2-arm curve + STRONGLY-SEPARATED endpoint-matched HR.
@@ -162,9 +169,12 @@ def _print(out: dict) -> None:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--query",
-                    default='"overall survival" AND "hazard ratio" AND randomized')
-    ap.add_argument("--max-ncts", type=int, default=300)
+    ap.add_argument("--query", default="overall survival",
+                    help="ctgov searchable term (NOT 'hazard ratio' -- unindexed); "
+                         "the HR is detected client-side")
+    ap.add_argument("--agg", default="results:with,phase:3",
+                    help="ctgov aggFilters (e.g. 'results:with' to drop the phase-3 limit)")
+    ap.add_argument("--max-ncts", type=int, default=1500)
     ap.add_argument("--min-sep", type=float, default=0.4)
     ap.add_argument("--corpus", default="corpus_pmc")
     ap.add_argument("--no-figures", action="store_true",
@@ -174,7 +184,7 @@ if __name__ == "__main__":
     base = Path(__file__).resolve().parent
     corpus = Path(args.corpus) if Path(args.corpus).is_absolute() else base / args.corpus
     out = run(args.query, args.max_ncts, args.min_sep, corpus,
-              verify_figures=not args.no_figures)
+              verify_figures=not args.no_figures, agg=args.agg)
     _print(out)
     Path(args.out).write_text(json.dumps(out, indent=2))
     print(f"\nwrote {args.out}")

@@ -24,7 +24,7 @@ def test_keeps_only_strong_two_arm_matched(monkeypatch, tmp_path):
         "NCT_3ARM":   _study("Overall Survival", 3, 4, ("0.40", "0.30", "0.55")),   # strong but 3-arm -> drop
         "NCT_NOHR":   _study("Overall Survival", 2, 4, None),                       # no HR -> drop
     }
-    monkeypatch.setattr(F, "search_ncts", lambda q, m, page_size=100: list(studies))
+    monkeypatch.setattr(F, "search_ncts", lambda q, m, page_size=100, agg=None: list(studies))
     monkeypatch.setattr(X, "fetch_study", lambda nct, sleep=0.2: studies[nct])
     # OA + figure resolution, deterministic per NCT
     monkeypatch.setattr(F, "result_pmid", lambda nct: "PMID_" + nct)
@@ -43,7 +43,7 @@ def test_keeps_only_strong_two_arm_matched(monkeypatch, tmp_path):
 
 def test_strong_but_not_extractable_is_not_ready(monkeypatch, tmp_path):
     studies = {"NCT_STRONG": _study("Overall Survival", 2, 4, ("0.45", "0.35", "0.58"))}
-    monkeypatch.setattr(F, "search_ncts", lambda q, m, page_size=100: list(studies))
+    monkeypatch.setattr(F, "search_ncts", lambda q, m, page_size=100, agg=None: list(studies))
     monkeypatch.setattr(X, "fetch_study", lambda nct, sleep=0.2: studies[nct])
     monkeypatch.setattr(F, "result_pmid", lambda nct: "PMID1")
     monkeypatch.setattr(F, "pmids_to_pmc", lambda pmids: {"PMID1": "PMC42"})
