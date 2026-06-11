@@ -14,35 +14,65 @@ is what moves a trial up the manifold — and **kmcurve's figure OCR is that lev
 
 ## What this demonstrates (`granularity_pool.py`)
 
-Pool k simulated trials (true logHR ~ N(μ, τ²), known IPD) three ways with DerSimonian–Laird, against the
-true-IPD pool the patient data would give:
+Pool trials four ways with DerSimonian–Laird — spanning the manifold from most to least identified for the
+HR estimand — against the true-IPD pool the patient data would give. Two modes:
+
+### Simulation (`python granularity_pool.py --k 16 --tau2 0.06`)
+
+k trials with true logHR ~ N(μ, τ²), exponential IPD:
 
 | pool | per-trial input | k=16, true μ=−0.357 (HR 0.70), τ²=0.06 |
 |---|---|---|
-| `true_ipd` | Cox logHR from simulated IPD (gold) | μ −0.417 (HR 0.66), τ² 0.150 |
-| `curve_only` | curve-only Guyot (no events) | μ **−0.166 (HR 0.85)**, τ² **0.012** |
+| `true_ipd` | logHR from simulated IPD (gold) | μ −0.417 (HR 0.66), τ² 0.150 |
 | `event_pinned` | Titman-QP + each arm's total events | μ **−0.415 (HR 0.66)**, τ² **0.149** |
+| `abstract_hr_only` | the reported HR, printed to 2 dp (no curve) | μ **−0.417 (HR 0.66)**, τ² 0.150 |
+| `curve_only` | curve-only Guyot (no events) | μ **−0.166 (HR 0.85)**, τ² **0.012** |
 
-**The censoring lever recovers the true-IPD pool — both the pooled effect AND the heterogeneity τ².**
-Curve-only does not just mis-estimate one trial: pooled, its attenuation toward HR=1 **shrinks μ, τ² and the
-prediction interval**, so the synthesis reads the trials as more homogeneous and the effect smaller than the
-truth. The event count is what lets a reconstructed pool stand in for an IPD meta-analysis. Locked by
-`test_granularity_pool.py` (seeded). Run: `python granularity_pool.py --k 16 --tau2 0.06`.
+In the simulation the censoring lever recovers the true-IPD pool on **both** μ and τ²; curve-only attenuates
+both, so the synthesis reads the trials as more homogeneous and the effect smaller than the truth.
+
+### Real data (`python granularity_pool.py --real`) — the gold-standard true-IPD datasets
+
+A coherent protective-direction panel of 9 registry-ipd gold-standard datasets, each run through kmcurve's
+**actual raster reconstruction pipeline** (`realipd_benchmark.recon_and_score`), pooled vs the true-IPD pool:
+
+| pool | k=9 protective panel | d-μ vs true | per-trial mean \|recon−true\| logHR |
+|---|---|---:|---:|
+| `true_ipd` | μ −0.544 (HR 0.58), τ² 0.123 | — | — |
+| `event_pinned` | μ −0.507 (HR 0.60) | +0.037 | 0.134 |
+| `abstract_hr_only` | μ −0.545 (HR 0.58) | −0.002 | 0.007 |
+| `curve_only` | μ **−0.322 (HR 0.72)** | **+0.222** | **0.372** |
+
+**The pooled-EFFECT half replicates on real data; the τ² half does not.** Curve-only reliably attenuates the
+pooled μ toward the null (true HR 0.58 → reconstructed 0.72) while event-pinned and abstract-HR-only recover
+it; per-trial, the curve-only logHR error dwarfs the others on **every** dataset (the panel-independent
+metric, robust to how effect directions balance). The completed manifold says something non-obvious: for the
+HR estimand a **bare reported HR pins the pooled effect**, while a **full curve *without* the censoring lever
+biases it** — more raw data, worse answer. (For time-dependent estimands — RMST, absolute risk, non-PH
+checks — the ordering inverts: the curve rungs carry everything, `abstract_hr_only` carries nothing.)
+
+Locked by `test_granularity_pool.py` (sim seeded; real tests use the deterministic raster pipeline, skip if
+registry-ipd absent). The strong-effect datasets (nwtco HR 19.6 → curve 1.05, prostateSurvival 8.2 → 1.7) are
+excluded from the default panel only so one outlier doesn't dominate τ²; on them the curve-only collapse is
+far more dramatic — `python granularity_pool.py --real --datasets nwtco,prostateSurvival,ebmt1,melanoma`.
 
 ## Honest scope / what is NOT claimed
 
-- **Measured aside:** with *both* arms' curves fixed at the same anchors, the log-rank HR is nearly
+- **τ² recovery is a simulation idealisation, NOT a real-data result.** On real raster reconstructions QP's
+  per-trial extraction noise perturbs the between-trial variance, so the censoring lever fixes the μ **bias**
+  but not the heterogeneity (on the default panel `event_pinned` τ² is no closer to truth than `curve_only`).
+  μ-recovery is the robust real-data claim; do not cite real-data τ² recovery.
+- **Measured aside (sim):** with *both* arms' curves fixed at the same anchors, the log-rank HR is nearly
   insensitive to the *total* event count, so the curve-only under-identification surfaces as **bias**
   (Guyot's zero-censoring assumption), not a variance band. The QP's value here is removing that bias.
-- This is a **simulation** with exponential survival + light random censoring — a clean illustration of the
-  mechanism, not a real-data result. The real-data half (and the Rubin `s²+r²` reconstruction-variance
-  propagation, which matters when reconstruction noise dominates) lives in registry-ipd
-  (`honest_pooling_sim.js`, `phase2_real_pooling.js`); do not duplicate it — cite it.
-- Single seed shown; the ordering (event-pinned ≈ true-IPD ≫ curve-only) is what the test asserts, not the
-  exact numbers.
+- The real-data panel pools **clinically unrelated** gold-standard datasets — a *methods* benchmark to
+  measure granularity-induced pooling bias, **not a clinical synthesis**. The Rubin `s²+r²`
+  reconstruction-variance propagation (which matters when reconstruction noise dominates) lives in
+  registry-ipd (`honest_pooling_sim.js`, `phase2_real_pooling.js`); do not duplicate it — cite it.
 
 ## Next
 
-Repeat on the `realipd_benchmark.py` gold-standard datasets (real true-IPD) instead of the simulator, so the
-pool-recovery claim rests on real reconstructions; and add an `abstract_HR_only` granularity tier (a logHR
-likelihood with no time structure) to complete the manifold (curve+NAR ▸ curve+events ▸ curve-only ▸ HR-only).
+- Replace the unrelated-datasets panel with a genuinely **same-indication** IPD set (if one becomes
+  available) so the pool is a real clinical synthesis, not just a bias measurement.
+- Probe whether a τ²-debiasing correction (subtracting the QP reconstruction-variance component) can recover
+  the heterogeneity half on real data — currently the open gap.

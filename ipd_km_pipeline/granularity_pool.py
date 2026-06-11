@@ -10,26 +10,57 @@ posted statistics identify. The censoring lever (a total-event count / at-risk
 table) is what moves a trial UP the manifold from curve-only.
 
 This module demonstrates the kmcurve-specific consequence at the META-ANALYSIS
-level, on kmcurve's OWN reconstruction (Guyot / Titman-QP): pool k trials three
-ways and compare to the true-IPD pool the patient data would give.
+level, on kmcurve's OWN reconstruction (Guyot / Titman-QP): pool k trials four
+ways and compare to the true-IPD pool the patient data would give. The four rungs
+span registry-ipd's data-completeness manifold (most -> least identified for the
+HR estimand):
 
-  - true_ipd     : DL pool of the per-trial Cox logHR from the simulated IPD (gold);
-  - curve_only   : pool of the CURVE-ONLY Guyot reconstruction (no event count ->
-                   assumes ~zero censoring -> attenuates each logHR toward 0);
-  - event_pinned : pool of the Titman-QP reconstruction fed each arm's total-event
-                   count (kmcurve's QP backend / OCR'd "N(events)").
+  - true_ipd        : DL pool of the per-trial logHR from the IPD (gold standard);
+  - event_pinned    : pool of the Titman-QP reconstruction fed each arm's total-event
+                      count (kmcurve's QP backend / OCR'd "N(events)"); point-identified;
+  - abstract_hr_only: pool of the logHR an abstract REPORTS (the trial's own HR,
+                      printed to 2 dp -- no curve, no time structure). The lowest
+                      curve-information rung, yet point-identified FOR THE HR;
+  - curve_only      : pool of the CURVE-ONLY Guyot reconstruction (no event count ->
+                      assumes ~zero censoring -> attenuates each logHR toward 0);
+                      only PARTIALLY identified -> the one biased rung.
 
-**Finding: the lever recovers the true-IPD pool -- BOTH the pooled effect AND the
-heterogeneity tau2; curve-only silently attenuates both.** A curve-only trial does
-not just mis-estimate its own HR -- pooled, the attenuation shrinks the synthesis's
-mu, tau2 and prediction interval, so the trials look more homogeneous and the effect
-smaller than the truth. The event count is what lets a reconstructed pool stand in
-for an IPD meta-analysis. (Aside, measured here: with BOTH arms' curves fixed at the
-anchors the log-rank HR is nearly insensitive to the *total* event count, so the
-under-identification shows up as curve-only BIAS, not variance -- the QP's value is
-removing that bias, not a variance band.)
+Two modes:
+  * simulation (default): k trials with true logHR ~ N(mu, tau2), exponential IPD;
+  * real data (--real):   the registry-ipd gold-standard true-IPD datasets, run
+                          through kmcurve's ACTUAL raster reconstruction pipeline
+                          (`realipd_benchmark.recon_and_score`), so the pool-recovery
+                          claim rests on real reconstructions, not the simulator.
 
-Run:  python granularity_pool.py [--k 12] [--tau2 0.05] [--seed 0]
+The manifold is NOT one ordering: for the HR estimand, true_ipd ~= abstract_hr_only
+~= event_pinned >> curve_only -- i.e. a bare reported HR pins the pooled effect while
+a full curve WITHOUT the censoring lever biases it. (For time-dependent estimands --
+RMST, absolute risk, non-PH checks -- the ordering inverts: the curve rungs carry
+everything and abstract_hr_only carries nothing.)
+
+**Finding (simulation): the lever recovers the true-IPD pool -- BOTH the pooled
+effect AND the heterogeneity tau2; curve-only silently attenuates both.** A
+curve-only trial does not just mis-estimate its own HR -- pooled, the attenuation
+shrinks the synthesis's mu, tau2 and prediction interval, so the trials look more
+homogeneous and the effect smaller than the truth.
+
+**Finding (real data, --real): the pooled-EFFECT half replicates; the tau2 half does
+NOT.** On the registry-ipd gold-standard datasets run through kmcurve's actual raster
+pipeline, curve-only reliably attenuates the pooled mu toward the null (e.g. true HR
+0.58 -> 0.72) while event-pinned and abstract-HR-only recover it, and per-trial the
+curve-only logHR error dwarfs the others on EVERY dataset. But the simulation's clean
+tau2 recovery does NOT carry over: QP's real per-trial extraction noise perturbs the
+between-trial variance, so the censoring lever fixes the mu BIAS, not the
+heterogeneity. mu-recovery is the robust real-data result; tau2-recovery is a
+simulation idealisation. (Honest scope -- do not claim real-data tau2 recovery.)
+
+(Aside, measured in the sim: with BOTH arms' curves fixed at the anchors the log-rank
+HR is nearly insensitive to the *total* event count, so the curve-only
+under-identification shows up as BIAS, not variance -- the QP's value is removing that
+bias, not a variance band.)
+
+Run:  python granularity_pool.py [--k 12] [--tau2 0.05] [--seed 0]      # simulation
+      python granularity_pool.py --real [--registry C:\\Projects\\registry-ipd]
 """
 
 from __future__ import annotations
@@ -105,6 +136,29 @@ def _recon_loghr(t: dict, ev_exp: Optional[int], ev_ctl: Optional[int]) -> float
     return float(np.log(max(hr, 1e-6)))
 
 
+def abstract_hr_loghr(loghr: float) -> float:
+    """The logHR an abstract REPORTS: the trial's own HR, printed to 2 decimals.
+    No curve, no time structure -- the manifold's HR-only rung. The 2-dp rounding
+    is the real information loss of a printed "HR 0.71" (not a fabricated value);
+    it leaves the point estimate essentially intact (this is why HR-only recovers
+    the pooled mu), unlike curve_only's structural attenuation."""
+    hr = float(np.exp(loghr))
+    return float(np.log(max(round(hr, 2), 1e-6)))
+
+
+def _pools_with_err(cols: Dict[str, np.ndarray], variances: np.ndarray) -> Dict[str, dict]:
+    """DL-pool each named logHR column and attach its (mu, tau2) error vs the
+    true_ipd pool. `cols` must contain a 'true_ipd' key."""
+    pools = {name: dl_pool(vals, variances) for name, vals in cols.items()}
+    ti = pools["true_ipd"]
+    for name, p in pools.items():
+        if name == "true_ipd":
+            continue
+        p["mu_err_vs_ipd"] = round(p["mu"] - ti["mu"], 4)
+        p["tau2_err_vs_ipd"] = round(p["tau2"] - ti["tau2"], 4)
+    return pools
+
+
 def dl_pool(loghrs: np.ndarray, variances: np.ndarray) -> dict:
     """DerSimonian-Laird random-effects pool -> (mu, tau2, PI width)."""
     loghrs, variances = np.asarray(loghrs, float), np.asarray(variances, float)
@@ -143,21 +197,158 @@ def run(k: int, tau2_true: float, seed: int) -> dict:
         rows.append({"s2": t["s2"],
                      "loghr_curve": _recon_loghr(t, None, None),            # curve-only Guyot
                      "loghr_event": _recon_loghr(t, t["ev_exp"], t["ev_ctl"]),  # QP event-pinned
+                     "loghr_abstract": abstract_hr_loghr(t["loghr_ipd"]),   # HR-only (reported)
                      "loghr_ipd": t["loghr_ipd"]})
 
     s2 = np.array([r["s2"] for r in rows])
-    pools = {
-        "true_ipd":     dl_pool(np.array([r["loghr_ipd"] for r in rows]), s2),
-        "curve_only":   dl_pool(np.array([r["loghr_curve"] for r in rows]), s2),
-        "event_pinned": dl_pool(np.array([r["loghr_event"] for r in rows]), s2),
-    }
-    # how close each reconstructed pool is to the true-IPD pool
-    ti = pools["true_ipd"]
-    for name in ("curve_only", "event_pinned"):
-        pools[name]["mu_err_vs_ipd"] = round(pools[name]["mu"] - ti["mu"], 4)
-        pools[name]["tau2_err_vs_ipd"] = round(pools[name]["tau2"] - ti["tau2"], 4)
+    pools = _pools_with_err({
+        "true_ipd":         np.array([r["loghr_ipd"] for r in rows]),
+        "event_pinned":     np.array([r["loghr_event"] for r in rows]),
+        "abstract_hr_only": np.array([r["loghr_abstract"] for r in rows]),
+        "curve_only":       np.array([r["loghr_curve"] for r in rows]),
+    }, s2)
     return {"k": k, "tau2_true": tau2_true, "mu_true": float(mu_true),
             "mean_s2": float(s2.mean()), "pools": pools}
+
+
+# --- real-data mode: the registry-ipd gold-standard true-IPD datasets, run
+# through kmcurve's ACTUAL raster reconstruction pipeline (no simulation) ---
+
+# A default panel of MODERATE protective-effect datasets (true HR ~0.2-0.9) that
+# extract to 2 arms reliably -- a COHERENT-DIRECTION synthesis, as a real
+# meta-analysis is (trials of one intervention share an effect direction). A
+# one-directional panel is what makes the POOLED mu attenuation visible: with a
+# balanced mix the per-trial shrinkage cancels at the pool (see the panel-
+# independent mean-abs-logHR metric, which holds regardless of direction).
+# Strong-effect datasets (nwtco HR 19.6, prostateSurvival 8.2, ebmt1 6.0, melanoma
+# 4.5) are excluded only so one outlier doesn't dominate tau2 -- on them
+# curve_only's collapse is far MORE dramatic (nwtco 19.6 -> 1.05). Override with
+# --datasets (e.g. add harmful HR>1 datasets to see attenuation from both sides).
+REAL_DEFAULT_DATASETS = [
+    "gehan", "aidssi", "diabetic", "cancer", "burn",
+    "gbsg", "alloauto", "kidtran", "pbc",
+]
+
+
+def per_trial_real(registry_dir, datasets: Optional[List[str]] = None,
+                   max_ds: Optional[int] = None) -> Tuple[List[dict], List[Tuple[str, str]]]:
+    """Reconstruct each gold-standard dataset via kmcurve's real raster pipeline
+    (`realipd_benchmark.recon_and_score`) and assemble per-trial logHRs at each
+    manifold rung. Returns (rows, skipped). A dataset is kept only if all three
+    reconstructed HRs (true/curve/QP) are finite and positive -- so every pool is
+    over the SAME trials (a paired comparison, not non-overlapping subsets)."""
+    import realipd_benchmark as RB
+
+    realipd = Path(registry_dir) / "realipd"
+    if not realipd.is_dir():
+        raise FileNotFoundError(
+            f"registry-ipd gold-standard not found at {realipd}. Pass "
+            f"--registry <path to registry-ipd> (download cmd in its "
+            f"validate/goldstandard.js header).")
+    want = datasets or REAL_DEFAULT_DATASETS
+    rows: List[dict] = []
+    skipped: List[Tuple[str, str]] = []
+    for ds in want:
+        cfg = RB.CONFIG_BY_DS.get(ds)
+        csv = realipd / f"{ds}.csv"
+        if cfg is None or not csv.exists():
+            skipped.append((ds, "missing")); continue
+        try:
+            r = RB.recon_and_score(csv, cfg)
+        except Exception as exc:
+            skipped.append((ds, f"error:{type(exc).__name__}")); continue
+        if r.get("status") != "scored":
+            skipped.append((ds, str(r.get("status")))); continue
+        thr, cur, qp = r.get("true_hr"), r.get("recon_hr_curveonly"), r.get("recon_hr_qp")
+        ev = r.get("true_events") or 0
+        if any(v is None or not np.isfinite(v) or v <= 0 for v in (thr, cur, qp)) or ev < 1:
+            skipped.append((ds, "nonfinite_hr")); continue
+        loghr_ipd = float(np.log(thr))
+        rows.append({
+            "ds": ds, "label": r.get("label", ds), "true_hr": float(thr),
+            "events": int(ev), "s2": 1.0 / max(int(ev), 1),
+            "loghr_ipd": loghr_ipd,
+            "loghr_abstract": abstract_hr_loghr(loghr_ipd),
+            "loghr_event": float(np.log(qp)),
+            "loghr_curve": float(np.log(cur)),
+        })
+        if max_ds and len(rows) >= max_ds:
+            break
+    return rows, skipped
+
+
+def run_real(registry_dir, datasets: Optional[List[str]] = None,
+             max_ds: Optional[int] = None) -> dict:
+    """Real-data analogue of `run`: pool the gold-standard datasets at each
+    manifold rung from kmcurve's actual reconstructions, vs the true-IPD pool."""
+    rows, skipped = per_trial_real(registry_dir, datasets, max_ds)
+    if len(rows) < 2:
+        raise RuntimeError(
+            f"only {len(rows)} dataset(s) reconstructed to 2 arms -- need >=2 to "
+            f"pool. Skipped: {skipped}")
+    s2 = np.array([r["s2"] for r in rows], float)
+    cols = {
+        "true_ipd":         np.array([r["loghr_ipd"] for r in rows]),
+        "event_pinned":     np.array([r["loghr_event"] for r in rows]),
+        "abstract_hr_only": np.array([r["loghr_abstract"] for r in rows]),
+        "curve_only":       np.array([r["loghr_curve"] for r in rows]),
+    }
+    pools = _pools_with_err(cols, s2)
+    # PANEL-INDEPENDENT metric: per-trial mean |reconstructed - true| logHR. Unlike
+    # the pooled mu (which cancels when the panel mixes directions), this captures
+    # the robust dataset-level finding directly -- curve_only's per-trial shrinkage
+    # does not depend on how the trials' effect directions happen to balance.
+    ipd = cols["true_ipd"]
+    mean_abs_loghr_err = {
+        name: round(float(np.mean(np.abs(col - ipd))), 4)
+        for name, col in cols.items() if name != "true_ipd"
+    }
+    return {"mode": "real", "k": len(rows),
+            "datasets": [r["ds"] for r in rows], "skipped": skipped,
+            "mean_s2": float(s2.mean()), "mu_true": float(pools["true_ipd"]["mu"]),
+            "mean_abs_loghr_err": mean_abs_loghr_err, "pools": pools, "rows": rows}
+
+
+def _print_real(o: dict) -> None:
+    print(f"\n=== granularity-manifold pooling on REAL gold-standard IPD "
+          f"(k={o['k']} datasets) ===")
+    print("  (kmcurve's actual raster reconstruction pipeline; unrelated trials "
+          "pooled\n   only to MEASURE granularity-induced pooling bias -- not a "
+          "clinical synthesis)")
+    print(f"\n  {'dataset':<11}{'trueHR':>8}{'absHR':>7}{'eventHR':>9}{'curveHR':>9}")
+    for r in o["rows"]:
+        print(f"  {r['ds']:<11}{np.exp(r['loghr_ipd']):>8.2f}"
+              f"{np.exp(r['loghr_abstract']):>7.2f}{np.exp(r['loghr_event']):>9.2f}"
+              f"{np.exp(r['loghr_curve']):>9.2f}")
+    print(f"\n  {'pool':<18}{'mu(logHR)':>11}{'HR':>7}{'tau2':>9}{'PI width':>10}"
+          f"{'d-mu':>8}{'d-tau2':>9}")
+    for name, p in o["pools"].items():
+        de = f"{p.get('mu_err_vs_ipd', 0):>8.3f}" if "mu_err_vs_ipd" in p else " " * 8
+        dt = f"{p.get('tau2_err_vs_ipd', 0):>9.3f}" if "tau2_err_vs_ipd" in p else " " * 9
+        print(f"  {name:<18}{p['mu']:>11.3f}{np.exp(p['mu']):>7.2f}{p['tau2']:>9.3f}"
+              f"{p['pi_width']:>10.3f}{de}{dt}")
+    err = o["mean_abs_loghr_err"]
+    print(f"\n  per-trial mean |recon - true| logHR (panel-independent):  "
+          f"abstract {err['abstract_hr_only']}  event {err['event_pinned']}  "
+          f"curve {err['curve_only']}")
+    cu, ev, ab = (o["pools"]["curve_only"], o["pools"]["event_pinned"],
+                  o["pools"]["abstract_hr_only"])
+    print(f"\n  ROBUST finding -- the pooled EFFECT (mu): abstract-HR-only "
+          f"(d-mu {ab['mu_err_vs_ipd']:+.3f}) and event-pinned (d-mu "
+          f"{ev['mu_err_vs_ipd']:+.3f}) recover the true-IPD pool;")
+    print(f"  curve-only is the one biased rung (d-mu {cu['mu_err_vs_ipd']:+.3f}) "
+          f"-- a full curve WITHOUT the censoring lever attenuates the pooled effect")
+    print("  toward the null. Per-trial, curve error >> event ~ abstract (above) on "
+          "every dataset.")
+    print(f"\n  CAVEAT (honest) -- tau2 (d {cu['tau2_err_vs_ipd']:+.3f} curve, "
+          f"{ev['tau2_err_vs_ipd']:+.3f} event): the clean tau2 RECOVERY the simulation")
+    print("  shows does NOT replicate on real reconstructions -- QP's per-trial "
+          "extraction noise\n  perturbs the between-trial variance, so the censoring "
+          "lever reliably fixes the mu\n  BIAS but not the heterogeneity. mu is the "
+          "robust real-data result; tau2 is not.")
+    if o["skipped"]:
+        print(f"\n  skipped {len(o['skipped'])}: "
+              + ", ".join(f"{d}({why})" for d, why in o["skipped"]))
 
 
 def _print(o: dict) -> None:
@@ -183,9 +374,26 @@ if __name__ == "__main__":
     ap.add_argument("--k", type=int, default=12)
     ap.add_argument("--tau2", type=float, default=0.05)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--out", default="granularity_pool_results.json")
+    ap.add_argument("--real", action="store_true",
+                    help="pool the registry-ipd gold-standard true-IPD datasets "
+                         "via kmcurve's real reconstruction pipeline (no simulation)")
+    ap.add_argument("--registry", default=r"C:\Projects\registry-ipd",
+                    help="path to the registry-ipd repo (for realipd/*.csv)")
+    ap.add_argument("--datasets", default=None,
+                    help="comma-separated dataset ids for --real (default: a "
+                         "12-dataset coherent panel)")
+    ap.add_argument("--max-ds", type=int, default=None,
+                    help="cap the number of --real datasets pooled")
+    ap.add_argument("--out", default=None)
     args = ap.parse_args()
-    out = run(args.k, args.tau2, args.seed)
-    _print(out)
-    Path(args.out).write_text(json.dumps(out, indent=2))
-    print(f"\nwrote {args.out}")
+    if args.real:
+        ds_list = args.datasets.split(",") if args.datasets else None
+        out = run_real(args.registry, ds_list, args.max_ds)
+        _print_real(out)
+        default_out = "granularity_pool_real_results.json"
+    else:
+        out = run(args.k, args.tau2, args.seed)
+        _print(out)
+        default_out = "granularity_pool_results.json"
+    Path(args.out or default_out).write_text(json.dumps(out, indent=2))
+    print(f"\nwrote {args.out or default_out}")
