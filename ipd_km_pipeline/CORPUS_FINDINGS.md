@@ -455,6 +455,29 @@ auto-accepted high-confidence figures). The weak-label bootstrap is the right
 day-1 substitute, but a heuristic-distilled model cannot exceed the heuristic;
 real gains need real masks on hard (coloured/dashed/overlapping) figures.
 
+### Scaled re-run (2026-06-11): yield holds, the gate begins to crack
+
+Acquisition grew the corpus ~58 → ~500 PMC PDFs (`acquire_corpus.py` after the
+pagination/retry/reconcile hardening). Re-running `train_on_figures.py`:
+
+| metric | 58 PDFs | ~500 PDFs |
+|---|---:|---:|
+| usable 2-arm figures | 9 | **82** (147 boxes) |
+| yield | 15.5% | **16.4%** |
+| train / held-out figs | 8 / 1 | 66 / 16 |
+| held-out arm-IoU | ~0.00 | **0.073** |
+
+- **Yield scales linearly** — ~16% holds at 10× scale (9→82), confirming the
+  acquire → caption-anchor → weak-label pipeline scales as the negative result
+  predicted (NOT architecture-limited).
+- **First learning signal** — held-out arm-IoU moved 0.00 → 0.073. Still weak
+  (loss ~flat 1.05–1.15; a useful model needs ~0.5+), but it is no longer
+  flat-zero: with ~8× the training figures the U-Net begins to segment arms.
+- **Direction confirmed, gate not yet cleared.** Extrapolating ~16% to the
+  ~1500-PDF target → ~240 usable figures, the next milestone for a stronger
+  signal. Also fixed `train_on_figures` observability (flushed per-25-PDF
+  progress) — the build was silent for ~30 min due to block-buffered stdout.
+
 ## True-IPD external HR-accuracy: the first non-circular accuracy number — 2026-06-10
 
 Every prior corpus number is figure-INTERNAL (reconstructed events vs the

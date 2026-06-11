@@ -86,6 +86,14 @@ flips circrep's reconstructed events).
    the heuristic. Pipeline is built/tested and scales. See CORPUS_FINDINGS.md ->
    "Lever 3 real-figure training: weak labels + the data-gate".
 
+   **UPDATE (2026-06-11): corpus scaled ~58 -> ~500 PDFs; the gate is CRACKING.**
+   Yield holds at ~16% (9 -> **82 usable 2-arm figures**, 147 boxes), confirming
+   the pipeline scales linearly. Trained on 66 figures (held-out 16), held-out
+   **arm-IoU 0.00 -> 0.073** -- the U-Net's first non-zero learning signal,
+   though loss is still ~flat (1.05-1.15) so it's weak. Direction confirmed: more
+   data helps; the gate is data-gated as predicted, not yet cleared. Acquisition
+   continues toward ~1500 PDFs (-> ~240 usable figures projected) for the next run.
+
 4. **Calibrated confidence** that PREDICTS reconstruction error (not just
    calibration R^2), so auto-accept vs human-flag is reliable. Validate the
    confidence against actual error on lever 2's corpus. This is what makes
