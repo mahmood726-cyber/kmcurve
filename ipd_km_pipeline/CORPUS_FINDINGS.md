@@ -602,3 +602,35 @@ count from the AACT harvest rather than OCR-ing the paywalled Lancet figure), an
 it is a direct, quantified reinforcement of registry-ipd's POLICY.md ask. Both
 scans are cached/incremental — re-run as the corpus grows or OA status changes.
 +9 tests (`test_fusion_crossmatch.py`, `test_fusion_pairfinder.py`).
+
+## UPDATE: scaling the corpus to 663 PDFs finds the first dual-available pairs — 2026-06-11
+
+The "0 of 327" cross-match result was **corpus-bounded, not capability-bounded**, so the corpus was
+doubled and the (cached/incremental) `fusion_crossmatch.py` re-run over `corpus_pmc`:
+
+| metric | 327-PDF scan | **663-PDF scan** |
+|---|---:|---:|
+| PDFs scanned | 327 | **663** |
+| PDFs citing an NCT | 185 | **373** |
+| unique NCTs | 267 | **592** |
+| NCTs with posted ctgov results | 37 | **106** |
+| **dual-available fusion candidates** | **0** | **2** |
+
+The two candidates (both posted survival curve + OA figure citing the NCT):
+
+| PDF | NCT | outcome | timepoints | groups | posted HR |
+|---|---|---|---:|---:|:--:|
+| PMC7530824 | NCT01658878 | Overall Survival rate | 5 | 15 | — |
+| PMC13006393 | NCT03110107 | Progression-free Survival rate | 3 | 9 | — |
+
+**The 0→2 jump confirms corpus size was the binding constraint.** But honesty about quality: both are
+**early-phase multi-cohort dose-finding trials** (NCT01658878 = nivolumab Phase 1/2, 657 pts, 15 dose
+groups; NCT03110107 = BMS-986218 first-in-human Phase 1/2, 376 pts, 9 groups) and **neither posts a
+hazard ratio**. They are valid **OCR-pipeline demonstration targets** (a real figure to extract an
+at-risk table from, paired with the exact registry anchors) but **not validation-grade**: with no posted
+HR there is no held-out ground truth, and the many-cohort structure is not the clean 2-arm comparison the
+fusion HR-recovery validation needs. A **2-arm + posted-HR** open-access pair is still absent at 663 PDFs
+— the confirmatory-RCT open-access gap (paywalled industry primaries) persists, exactly as the
+anti-correlation finding predicts. Next: grow the corpus further, or target OA primaries of 2-arm RCTs
+specifically; meanwhile NCT01658878/NCT03110107 are the first end-to-end OCR-fusion demo candidates.
+Reproduce: `python fusion_crossmatch.py --corpus corpus_pmc --out fusion_candidates.json`.
