@@ -65,8 +65,14 @@ def _get(url: str, timeout: int = 30, retries: int = 4, max_seconds: float = 90.
             if exc.code in (404, 410, 403) or attempt == retries - 1:
                 raise
             time.sleep(2 ** attempt)
+        except TimeoutError:
+            # Socket or wall-clock timeout = this fetch is too slow. Retrying the
+            # same slow URL won't help and would burn retries*max_seconds on one
+            # bad PDF -- fail fast so the caller skips it and moves on. (DNS bursts
+            # raise URLError below, which IS retried.)
+            raise
         except Exception:
-            # URLError (DNS/conn reset), socket/wall-clock timeout -- transient.
+            # URLError (DNS getaddrinfo bursts, conn reset) -- transient, back off.
             if attempt == retries - 1:
                 raise
             time.sleep(2 ** attempt)
