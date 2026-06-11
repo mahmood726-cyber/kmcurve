@@ -10,8 +10,10 @@ def _study(measures):
             "resultsSection": {"outcomeMeasuresModule": {"outcomeMeasures": measures}}}
 
 
-def _km_measure(title, class_titles, n_groups, param="NUMBER", hr=None):
+def _km_measure(title, class_titles, n_groups, param="NUMBER", hr=None,
+                description="", time_frame=""):
     m = {"title": title, "paramType": param,
+         "description": description, "timeFrame": time_frame,
          "classes": [{"title": t} for t in class_titles],
          "groups": [{} for _ in range(n_groups)]}
     if hr:
@@ -92,6 +94,45 @@ def test_does_not_borrow_mismatched_endpoint_hr():
     km = X._km_from_study(study, "NCT01942135")["km"]
     assert km is not None and km["n_timepoints"] == 3       # the curve is still detected
     assert km["hr"] is None and km["hr_endpoint_matched"] is False   # but no mismatched HR
+
+
+def test_endpoint_key_resolves_generic_title_via_description():
+    """A generic 'Survival Probabilities' curve title carries no endpoint by
+    title, but its description (overall survival -> death/alive, no progression)
+    resolves it to OS; a description naming a competing endpoint wins."""
+    # PALOMA-3 OS landmark-survival description (no 'progression' anywhere)
+    assert X._endpoint_key(
+        "Survival Probabilities at Year 1, Year 2, and Year 3",
+        description="probability of survival after randomization based on the "
+                    "Kaplan-Meier estimate; censored to last date known to be alive",
+        time_frame="From randomization until death (assessed up to 36 months)") == "os"
+    # same generic title but a disease-free description must NOT become OS
+    assert X._endpoint_key(
+        "Survival Probabilities at Year 1, Year 2, and Year 3",
+        description="disease-free survival, time to recurrence") == "dfs"
+    # no description -> still fails closed
+    assert X._endpoint_key("Survival Probabilities at Year 1, Year 2, and Year 3") is None
+
+
+def test_paloma3_pair_uses_os_hr_not_pfs_via_description():
+    """NCT01942135 end state: with descriptions present, the OS survival-probability
+    curve resolves to OS and borrows the OS HR (0.81) -- NOT the PFS HR (0.42)."""
+    study = _study([
+        _km_measure("Progression-Free Survival (PFS)", ["Median"], n_groups=2,
+                    param="MEDIAN", hr=("0.422", "0.318", "0.560"),
+                    description="time to first documentation of progression or death"),
+        _km_measure("Overall Survival (OS)", ["Median"], n_groups=2, param="MEDIAN",
+                    hr=("0.814", "0.644", "1.029"),
+                    description="time from randomization to date of death due to any cause"),
+        _km_measure("Survival Probabilities at Year 1, Year 2, and Year 3",
+                    ["Year 1", "Year 2", "Year 3"], n_groups=2, param="NUMBER",
+                    description="probability of survival based on the Kaplan-Meier "
+                                "estimate; censored to last date known to be alive",
+                    time_frame="From randomization until death"),
+    ])
+    km = X._km_from_study(study, "NCT01942135")["km"]
+    assert km["endpoint"] == "os" and km["hr_endpoint_matched"] is True
+    assert km["hr"]["value"] == "0.814"          # the OS HR, not the PFS 0.422
 
 
 def test_borrows_hr_from_sibling_measure_same_endpoint():

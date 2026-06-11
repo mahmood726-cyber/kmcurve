@@ -142,6 +142,9 @@ def fetch_study(nct: str, sleep: float = 0.2) -> dict:
             continue  # only survival measures carry the curve + HR; shrinks cache
         keep.append({
             "title": title, "paramType": om.get("paramType", ""),
+            # description + timeFrame disambiguate a GENERIC curve title (e.g.
+            # "Survival Probabilities at Year 1/2/3") to its endpoint -- see _endpoint_key.
+            "description": om.get("description", ""), "timeFrame": om.get("timeFrame", ""),
             "classes": [{"title": c.get("title", "")} for c in om.get("classes", [])],
             "groups": [{} for _ in om.get("groups", [])],
             "analyses": [{"paramType": a.get("paramType"), "paramValue": a.get("paramValue"),
@@ -189,19 +192,34 @@ _ENDPOINT_FAMILIES = (
 )
 
 
-def _endpoint_key(title: str) -> Optional[str]:
-    """Normalise an outcome-measure title to its survival endpoint family
-    (os/pfs/dfs/...), or None when the title is too generic to identify one
-    (e.g. 'Survival Probabilities at Year 1, Year 2, and Year 3').
+def _endpoint_key(title: str, description: str = "", time_frame: str = "") -> Optional[str]:
+    """Normalise an outcome measure to its survival endpoint family
+    (os/pfs/dfs/...), or None when the endpoint can't be identified.
 
     This is the linkage key for attaching a posted HR to a curve: a hazard ratio
     may only be borrowed from a DIFFERENT outcome measure when that measure is the
-    SAME endpoint as the curve. A generic curve title yields None, so no HR is
-    attached -- the safe choice (better null than a mismatched HR)."""
+    SAME endpoint as the curve (else a PFS HR gets glued onto an OS curve).
+
+    Resolution order, strongest signal first:
+      1. the TITLE names an endpoint family;
+      2. the DESCRIPTION/timeFrame names one (a generic title like 'Survival
+         Probabilities at Year 1/2/3' whose description says 'disease-free' is DFS);
+      3. fallback OS: a survival/death measure whose description is about death/
+         being alive and names NO competing endpoint is overall survival -- this
+         is what makes a generic 'Survival Probabilities' OS curve linkable to the
+         trial's OS HR. Still fails closed (None) when nothing disambiguates."""
     t = (title or "").lower()
     for key, kws in _ENDPOINT_FAMILIES:
         if any(k in t for k in kws):
             return key
+    blob = f"{description or ''} {time_frame or ''}".lower()
+    if blob.strip():
+        for key, kws in _ENDPOINT_FAMILIES:       # an explicit endpoint named in the description wins
+            if any(k in blob for k in kws):
+                return key
+        # a pure survival/death measure (no progression/recurrence/etc.) is OS
+        if ("surviv" in t or "surviv" in blob) and any(w in blob for w in ("death", "died", "alive")):
+            return "os"
     return None
 
 
@@ -216,7 +234,8 @@ def _hr_for_endpoint(oms: list, endpoint: Optional[str]) -> Optional[dict]:
     if endpoint is None:
         return None
     for om in oms:
-        if _endpoint_key(om.get("title") or "") != endpoint:
+        if _endpoint_key(om.get("title") or "", om.get("description") or "",
+                         om.get("timeFrame") or "") != endpoint:
             continue
         for a in (om.get("analyses") or []):
             if "hazard" in (a.get("paramType") or "").lower():
@@ -246,7 +265,9 @@ def _km_from_study(d: dict, nct: str) -> dict:
         n_groups = len(om.get("groups", []))
         if is_surv and is_curve_param and n_tp >= 3 and n_groups >= 2:
             cand = {"title": title[:80], "n_timepoints": n_tp, "param": param,
-                    "n_groups": n_groups, "endpoint": _endpoint_key(title)}
+                    "n_groups": n_groups,
+                    "endpoint": _endpoint_key(title, om.get("description") or "",
+                                              om.get("timeFrame") or "")}
             if best is None or n_tp > best["n_timepoints"]:
                 best = cand
     if best is not None:
@@ -255,7 +276,7 @@ def _km_from_study(d: dict, nct: str) -> dict:
     return {"nct": nct, "has_results": True, "km": best}
 
 
-_CACHE_VERSION = 2  # bump when the cached study shape changes
+_CACHE_VERSION = 3  # bump when the cached study shape changes (v3: + description/timeFrame)
 
 
 def _load_cache() -> dict:

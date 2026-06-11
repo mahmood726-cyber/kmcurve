@@ -713,3 +713,49 @@ table + exact registry curve anchors), just not HR-validation-grade. Tests: +3
 (`test_does_not_borrow_mismatched_endpoint_hr`, `test_borrows_hr_from_sibling_measure_same_endpoint`,
 `test_endpoint_key_families`). Reproduce (offline; detector change re-detects from cache, no refetch):
 `python fusion_crossmatch.py --corpus corpus_pmc --out fusion_candidates.json`.
+
+## RESOLVED: the PALOMA-3 pair IS validation-grade — against the OS HR (0.814), and the fusion lands inside the CI — 2026-06-11
+
+The `→ 0` above was over-conservative: it dropped the pair because the curve's *title* names no endpoint.
+But the ctgov outcome **description** does — *"Survival Probabilities at Year 1/2/3"* has description
+"probability of survival … based on the Kaplan-Meier estimate … known to be alive", timeFrame "From
+randomization until death", and **no mention of progression**. That is Overall Survival, and PALOMA-3
+posts an **OS HR 0.814 (0.644–1.029)** on a sibling OS measure. So the pair is genuinely usable — with the
+*correct* (OS) HR, not the wrong (PFS 0.42) one, and not a null.
+
+**Fix, round 2 — description-aware endpoint resolution.** `_endpoint_key(title, description, timeFrame)`
+now resolves a generic curve title from its description/timeFrame: (1) an endpoint family named in the
+description wins; (2) failing that, a survival/death measure that mentions **no** competing endpoint
+(progression/recurrence/…) is Overall Survival. Still fails closed (None) when nothing disambiguates.
+`fetch_study` now caches `description` + `timeFrame` (cache `_CACHE_VERSION` 2 → 3, one re-fetch; the
+expensive pdf→NCT map is preserved). Re-run candidates:
+
+| PDF | NCT | curve endpoint | posted HR (endpoint-matched) | usable? |
+|---|---|---|---:|:--:|
+| **PMC9662922** | **NCT01942135** | **OS** (via description) | **0.814 (0.644–1.029)** | ✅ primary + at-risk |
+| PMC7530824 | NCT01658878 | OS | — (no HR on ctgov) | ✅ primary + at-risk |
+| PMC13006393 | NCT03110107 | PFS | — (no HR on ctgov) | ✅ primary + at-risk |
+| PMC9893404 | NCT00636168 | OS | 0.72 (was mis-matched 0.75 RFS) | ❌ NMA |
+
+**Honest count restored: `n_usable_with_hr` = 1 — now with the right HR.**
+
+**End-to-end fusion validation (`fusion_paloma3.py`).** Every input derived, none hardcoded: OS curve
+anchors + N from registry-ipd `cohort/NCT01942135.json`; OS death counts (201/347 vs 109/174) from ctgov's
+"OS-Number of Participants Who Died"; ground-truth OS HR 0.814 via the **same** endpoint-matched
+`_hr_for_endpoint`. Reconstructing two ways against the posted OS HR:
+
+| reconstruction | OS HR | fold vs posted 0.814 | inside posted 95% CI? |
+|---|---:|---:|:--:|
+| registry-only Guyot (anchors, NO censoring) | 1.119 | 1.374 | ❌ (wrong side of 1 — the trap) |
+| **FUSION** (anchors + figure event counts) | **0.784** | **1.038 (~4%)** | ✅ |
+
+This is the **first end-to-end NAR fusion on a pair the corpus cross-match discovered itself**, validated
+against the correct endpoint's posted HR: registry-only falls outside the CI (and implies harm, HR 1.12),
+and the figure's event counts pull fusion to 0.784 — inside the posted CI, ~4% error — reproducing the
+RADIANT-4 identifiability-trap pattern on a self-discovered pair. Honest scope: 3 sparse landmark anchors
+(yr 1/2/3) + ctgov-posted death counts; OS HR ≈ 1 (non-significant OS) is a *harder* target than a
+well-separated curve. In full production kmcurve OCRs the identical "N (events)" from PMC9662922's figure
+(the raster_km step); here the count is the registry-posted death total. Tests: +2 more crossmatch
+(`test_endpoint_key_resolves_generic_title_via_description`,
+`test_paloma3_pair_uses_os_hr_not_pfs_via_description`) + `test_fusion_paloma3.py` (2). Reproduce:
+`python fusion_paloma3.py`.
