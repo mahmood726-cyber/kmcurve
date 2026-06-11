@@ -634,3 +634,37 @@ fusion HR-recovery validation needs. A **2-arm + posted-HR** open-access pair is
 anti-correlation finding predicts. Next: grow the corpus further, or target OA primaries of 2-arm RCTs
 specifically; meanwhile NCT01658878/NCT03110107 are the first end-to-end OCR-fusion demo candidates.
 Reproduce: `python fusion_crossmatch.py --corpus corpus_pmc --out fusion_candidates.json`.
+
+## UPDATE: corpus 1500 PDFs → 6 candidates, 4 with a posted HR (the gap closes) — 2026-06-11
+
+The mirror kept downloading (658 → **1500** OA PMC PDFs). Re-running the cross-match surfaced the first
+**validation-grade** fusion pairs — and made the scan tractable at this size by switching NCT extraction
+from pdfplumber to **PyMuPDF/fitz (~1.3s vs ~15s per PDF, ~10× faster; identical NCT output verified on
+12/12 cached PDFs)**, with a pdfplumber fallback. The cached pdf→NCT map stays valid across the switch.
+
+| metric | 327 | 663 | **1500** |
+|---|---:|---:|---:|
+| PDFs scanned | 327 | 663 | **1500** |
+| PDFs citing an NCT | 185 | 373 | **803** |
+| unique NCTs | 267 | 592 | **1297** |
+| NCTs with posted results | 37 | 106 | **254** |
+| dual-available candidates | 0 | 2 | **6** |
+| …**of which post a hazard ratio** | 0 | 0 | **4** |
+
+| PDF | NCT | outcome | tpts | posted HR (95% CI) |
+|---|---|---|---:|---|
+| PMC9893404 | NCT00636168 | **Overall Survival** | 6 | **0.75 (0.64–0.90)** |
+| PMC9662922 | NCT01942135 | Survival probability | 3 | 0.42 (0.32–0.56) |
+| PMC9487257 | NCT01121393 | Time to Objective Response¹ | 14 | 0.28 (0.20–0.39) |
+| PMC9487257 | NCT01466660 | Time to Objective Response¹ | 7 | 0.82 (0.66–1.03) |
+| PMC7530824 | NCT01658878 | OS rate | 5 | — |
+| PMC13006393 | NCT03110107 | PFS rate | 3 | — |
+
+**The 0→2→6 trajectory (and 0→0→4 with a posted HR) confirms the bottleneck was corpus size, not
+capability.** `NCT00636168` (OS curve, 6 timepoints, **HR 0.75**, OA figure PMC9893404) is the first clean
+**2-arm survival + posted-HR + open-access-figure** pair — held-out ground truth for an end-to-end NAR
+fusion: harvest the registry anchors, OCR the figure's at-risk table, reconstruct, and score the
+reconstructed HR against the posted 0.75. ¹The two "Time to Objective Response" rows are response-time
+curves matched via the "time to" keyword — genuine time-to-event curves with HRs, but not survival, so
+treat them as fusion *mechanism* demos rather than survival validation. Reproduce:
+`python fusion_crossmatch.py --corpus corpus_pmc --out fusion_candidates.json`.
