@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import List, Optional
@@ -61,8 +62,9 @@ def _get(url: str, timeout: int = 30, retries: int = 4, max_seconds: float = 90.
                     chunks.append(chunk)
                 return b"".join(chunks)
         except urllib.error.HTTPError as exc:
-            # 404/410/403 are permanent for this URL; 429/5xx are worth retrying.
-            if exc.code in (404, 410, 403) or attempt == retries - 1:
+            # 404/410/403/500 are permanent for an EPMC ?pdf=render URL (no
+            # renderable PDF for this article); 429/502/503 are worth retrying.
+            if exc.code in (404, 410, 403, 500) or attempt == retries - 1:
                 raise
             time.sleep(2 ** attempt)
         except TimeoutError:
@@ -240,7 +242,11 @@ def acquire(query: str, n: int, out_dir: Path, sleep: float = 0.34,
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = out_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"pdfs": []}
-    have = {e["pmcid"] for e in manifest["pdfs"]}
+    manifest.setdefault("no_pdf", [])  # PMCIDs with no renderable PDF (permanent)
+    # `have` skips both downloaded AND known-dead ids, so a re-run does NOT
+    # re-attempt the permanently-failing ids (HTTP 500 / interstitial) scattered
+    # through the relevance list -- the cause of restarts stalling on dead PDFs.
+    have = {e["pmcid"] for e in manifest["pdfs"]} | set(manifest["no_pdf"])
 
     # Reconcile: adopt any PMC*.pdf already on disk but missing from the manifest
     # (recovers PDFs from a run killed before its last flush, so they are never
@@ -277,6 +283,7 @@ def acquire(query: str, n: int, out_dir: Path, sleep: float = 0.34,
                 time.sleep(sleep)
                 if pdf is None:
                     skipped["no_pdf"] += 1
+                    manifest["no_pdf"].append(pmcid)  # interstitial = permanent
                     continue
                 manifest["pdfs"].append({"pmcid": pmcid, "pdf": pdf.name})
                 got += 1
@@ -285,7 +292,14 @@ def acquire(query: str, n: int, out_dir: Path, sleep: float = 0.34,
                 if since_flush >= flush_every:
                     manifest_path.write_text(json.dumps(manifest, indent=2))
                     since_flush = 0
+            except urllib.error.HTTPError as exc:
+                # 404/410/403/500 = no renderable PDF -> blacklist so future runs
+                # skip it instead of re-failing the same dead id every restart.
+                skipped["no_pdf"] += 1
+                manifest["no_pdf"].append(pmcid)
             except Exception as exc:
+                # transient (timeout / DNS getaddrinfo) -- do NOT blacklist; a
+                # later run retries it.
                 skipped["error"] += 1
                 print(f"  skip PMC{pmcid}: {type(exc).__name__}: {exc}")
     manifest_path.write_text(json.dumps(manifest, indent=2))
