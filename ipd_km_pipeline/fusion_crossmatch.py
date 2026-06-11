@@ -245,6 +245,19 @@ def _hr_for_endpoint(oms: list, endpoint: Optional[str]) -> Optional[dict]:
     return None
 
 
+def _hr_separation(hr_value) -> Optional[float]:
+    """|log(HR)| -- effect separation. A strongly-separated HR (far from 1) is a
+    HIGHER-SIGNAL validation target than a flat ~1 HR (PALOMA-3 OS 0.814,
+    sep~0.21, is a hard, flat target): the reconstruction error is easier to see
+    against a large true effect. None if HR is missing/unparseable/<=0."""
+    import math
+    try:
+        h = float(hr_value)
+    except (TypeError, ValueError):
+        return None
+    return abs(math.log(h)) if h > 0 else None
+
+
 def _km_from_study(d: dict, nct: str) -> dict:
     """Pure parse: detect a posted KM-estimate CURVE (a survival-probability
     outcome with >=3 TIMEPOINT classes -- not a subgroup/median table) and an
@@ -346,6 +359,7 @@ def run(corpus_dir: Path, limit: Optional[int] = None) -> dict:
                     "posted_ci": (km.get("hr") or {}).get("ci"),
                     "curve_endpoint": km.get("endpoint"),
                     "hr_endpoint_matched": km.get("hr_endpoint_matched", False),
+                    "hr_separation": _hr_separation((km.get("hr") or {}).get("value")),
                     "outcome": km["title"],
                     "pdf_likely_primary": cls["likely_primary"], "pdf_has_at_risk": cls["has_at_risk"],
                     "fusion_usable": cls["fusion_usable"],
@@ -353,6 +367,10 @@ def run(corpus_dir: Path, limit: Optional[int] = None) -> dict:
     # best first: FUSION-USABLE (primary + at-risk table), then has HR, then more timepoints
     candidates.sort(key=lambda c: (bool(c["fusion_usable"]), c["posted_hr"] is not None, c["n_timepoints"]), reverse=True)
     usable = [c for c in candidates if c["fusion_usable"]]
+    # the HIGHER-SIGNAL validation target: a usable pair with an endpoint-matched HR,
+    # picked by GREATEST effect separation (flat ~1 HRs validate weakly).
+    val_targets = [c for c in usable if c["hr_endpoint_matched"] and c["hr_separation"] is not None]
+    val_targets.sort(key=lambda c: c["hr_separation"], reverse=True)
     return {
         "n_pdfs": len(pdfs),
         "n_pdfs_with_nct": sum(1 for ns in pdf_ncts.values() if ns),
@@ -361,6 +379,7 @@ def run(corpus_dir: Path, limit: Optional[int] = None) -> dict:
         "n_fusion_candidates": len(candidates),
         "n_fusion_usable": len(usable),
         "n_usable_with_hr": sum(1 for c in usable if c["posted_hr"] is not None),
+        "best_validation_target": val_targets[0] if val_targets else None,
         "candidates": candidates,
     }
 
@@ -379,6 +398,11 @@ def _print(out: dict) -> None:
             hr = c["posted_hr"] if c["posted_hr"] is not None else "-"
             print(f"  {c['pdf'][:29]:<30}{c['nct']:<14}{c['n_timepoints']:>5}{str(hr):>10}  "
                   f"{c['outcome'][:34]}")
+        bt = out.get("best_validation_target")
+        if bt:
+            print(f"\n  >> BEST validation target (most-separated usable + endpoint-matched HR):"
+                  f"\n     {bt['pdf']} <-> {bt['nct']}  {bt['curve_endpoint'].upper()} HR {bt['posted_hr']}"
+                  f"  |log HR|={bt['hr_separation']:.2f}  ({bt['n_timepoints']} timepoints)")
         print("\n  -> harvest the NCT anchors (registry-ipd harvest_trial.py) + OCR the PDF's"
               "\n     at-risk table (raster_km) for a fully real NAR fusion.")
     else:

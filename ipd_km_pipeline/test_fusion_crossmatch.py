@@ -70,6 +70,19 @@ def test_is_timepoint_helper():
     assert not X._is_timepoint("Sex: Male") and not X._is_timepoint("Race: Caucasian")
 
 
+def test_hr_separation():
+    import math
+    assert X._hr_separation(None) is None
+    assert X._hr_separation("n/a") is None
+    assert X._hr_separation("0") is None                       # HR<=0 -> undefined
+    assert abs(X._hr_separation("1.0") - 0.0) < 1e-9           # no effect -> flat
+    assert abs(X._hr_separation("0.814") - abs(math.log(0.814))) < 1e-9
+    # a strongly-separated HR (0.40) out-scores a flat one (0.814)
+    assert X._hr_separation("0.40") > X._hr_separation("0.814")
+    # symmetric in log space: 0.5 and 2.0 are equally separated
+    assert abs(X._hr_separation("0.5") - X._hr_separation("2.0")) < 1e-9
+
+
 def test_endpoint_key_families():
     assert X._endpoint_key("Overall Survival (OS)") == "os"
     assert X._endpoint_key("Progression-Free Survival (PFS)") == "pfs"
