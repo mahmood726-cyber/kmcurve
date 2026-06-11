@@ -45,44 +45,82 @@ def _iter_pdfs():
             yield p
 
 
+def _extract_one(pdf, exclude_text: bool):
+    """Weak 2-arm-mask samples for one PDF (None if the figure-locate/extract
+    chain yields no usable 2-arm mask)."""
+    try:
+        cands = FL.locate_km_figures(str(pdf), require_caption=True)
+    except Exception:
+        return None
+    if not cands:
+        return None
+    c = cands[0]
+    try:
+        g = render_page(str(pdf), c.page_index, dpi=DPI)
+    except Exception:
+        return None
+    if c.bbox:
+        sc = DPI / 72.0
+        x0, t, x1, b = c.bbox
+        g = g[int(t * sc):int(b * sc), int(x0 * sc):int(x1 * sc)]
+    boxes = detect_plot_boxes(g) or ([detect_plot_box(g)] if detect_plot_box(g) else [])
+    tboxes = _rapidocr_text_boxes(g) if exclude_text else None
+    samples = []
+    for box in boxes:
+        if box is None or min(box.x1 - box.x0, box.y1 - box.y0) < 40:
+            continue
+        # thickness=3 so 1px curves survive the downsize to 128x160
+        img, mask = WL.figure_sample(g, box, text_boxes=tboxes, n_arms=2, thickness=3)
+        if 1 in mask and 2 in mask:                 # a usable 2-arm mask
+            samples.append(WL.resize_sample(img, mask, 128, 160))
+    return samples or None
+
+
+def _cache_path(exclude_text: bool) -> Path:
+    Path("artifacts").mkdir(exist_ok=True)
+    return Path("artifacts") / f"weak_samples_{'notext' if exclude_text else 'all'}.pkl"
+
+
 def build_samples(exclude_text: bool):
-    """One sample per plot box that yields a 2-arm weak mask. Grouped by figure."""
-    figures = []  # list of (fig_id, [ (img,mask), ... ])
+    """One sample per plot box that yields a 2-arm weak mask, grouped by figure.
+
+    INCREMENTAL CACHE: the (image, mask) samples and the set of processed PDF
+    stems are cached to artifacts/, so a re-run only extracts PDFs new since the
+    last build (extraction over hundreds of PDFs is the slow part). The cache
+    records BOTH yields (figures) and misses (PDFs with no usable mask) so a
+    miss is never re-attempted. Delete the .pkl to force a full rebuild."""
+    import pickle
+
+    cache_file = _cache_path(exclude_text)
+    cache = {"samples": {}, "misses": []}           # stem->samples ; [stems w/o mask]
+    if cache_file.exists():
+        try:
+            cache = pickle.loads(cache_file.read_bytes())
+        except Exception:
+            cache = {"samples": {}, "misses": []}
+    done = set(cache["samples"]) | set(cache["misses"])
+
     pdfs = list(_iter_pdfs())
-    print(f"building weak masks from {len(pdfs)} corpus PDFs...", flush=True)
-    for i, pdf in enumerate(pdfs, 1):
+    todo = [p for p in pdfs if p.stem not in done]
+    print(f"{len(pdfs)} corpus PDFs; {len(done)} cached, {len(todo)} new to extract...",
+          flush=True)
+    for i, pdf in enumerate(todo, 1):
         if i % 25 == 0:
-            print(f"  ...{i}/{len(pdfs)} PDFs scanned, {len(figures)} usable figures so far",
-                  flush=True)
-        try:
-            cands = FL.locate_km_figures(str(pdf), require_caption=True)
-        except Exception:
-            continue
-        if not cands:
-            continue
-        c = cands[0]
-        try:
-            g = render_page(str(pdf), c.page_index, dpi=DPI)
-        except Exception:
-            continue
-        if c.bbox:
-            sc = DPI / 72.0
-            x0, t, x1, b = c.bbox
-            g = g[int(t * sc):int(b * sc), int(x0 * sc):int(x1 * sc)]
-        boxes = detect_plot_boxes(g) or ([detect_plot_box(g)] if detect_plot_box(g) else [])
-        tboxes = _rapidocr_text_boxes(g) if exclude_text else None
-        samples = []
-        for box in boxes:
-            if box is None or min(box.x1 - box.x0, box.y1 - box.y0) < 40:
-                continue
-            # thickness=3 so 1px curves survive the downsize to 128x160
-            img, mask = WL.figure_sample(g, box, text_boxes=tboxes, n_arms=2, thickness=3)
-            if 1 in mask and 2 in mask:                 # a usable 2-arm mask
-                samples.append(WL.resize_sample(img, mask, 128, 160))
+            print(f"  ...{i}/{len(todo)} new PDFs, "
+                  f"{len(cache['samples'])} usable figures total", flush=True)
+        samples = _extract_one(pdf, exclude_text)
         if samples:
-            figures.append((pdf.stem, samples))
+            cache["samples"][pdf.stem] = samples
             print(f"[sample] {pdf.name}: {len(samples)} box(es)", flush=True)
-    return figures
+        else:
+            cache["misses"].append(pdf.stem)
+        if i % 25 == 0:                              # periodic flush for long builds
+            cache_file.write_bytes(pickle.dumps(cache))
+    cache_file.write_bytes(pickle.dumps(cache))
+
+    # return only the figures whose PDF is in the CURRENT corpus, stable order
+    present = {p.stem for p in pdfs}
+    return [(stem, s) for stem, s in cache["samples"].items() if stem in present]
 
 
 def _iou(pred, mask, cls):
