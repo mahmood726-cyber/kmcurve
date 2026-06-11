@@ -100,3 +100,22 @@ def test_run_real_is_deterministic():
     a = G.run_real(_REGISTRY, _REAL_TEST_DS)
     b = G.run_real(_REGISTRY, _REAL_TEST_DS)
     assert a["pools"]["curve_only"]["mu"] == b["pools"]["curve_only"]["mu"]
+
+
+@pytest.mark.skipif(not _registry_available(), reason="registry-ipd not present")
+def test_tau2_gap_is_driven_by_strong_effect_small_n_trial():
+    """Characterised mechanism: the real-data tau2 under-recovery is ATTENUATION of
+    a strong-effect/small-sample trial (gehan, HR 0.19 / 30 events), not additive
+    reconstruction variance. Dropping it brings event-pinned tau2 much closer to the
+    true-IPD pool -- so tau2 recovery holds OUTSIDE that corner."""
+    panel = ["gehan", "aidssi", "diabetic", "cancer", "burn", "gbsg", "alloauto"]
+    full = G.run_real(_REGISTRY, panel)
+    drop = G.run_real(_REGISTRY, [d for d in panel if d != "gehan"])
+    d_full = abs(full["pools"]["event_pinned"]["tau2_err_vs_ipd"])
+    d_drop = abs(drop["pools"]["event_pinned"]["tau2_err_vs_ipd"])
+    assert d_drop < d_full - 0.02       # dropping the strong-effect/small-n trial recovers tau2
+    # and the per-trial error correlates with effect strength (attenuation, not noise)
+    rows, _ = G.per_trial_real(_REGISTRY, panel)
+    err = np.array([abs(r["loghr_event"] - r["loghr_ipd"]) for r in rows])
+    abslhr = np.array([abs(r["loghr_ipd"]) for r in rows])
+    assert np.corrcoef(err, abslhr)[0, 1] > 0.4

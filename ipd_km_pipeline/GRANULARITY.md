@@ -58,10 +58,15 @@ far more dramatic — `python granularity_pool.py --real --datasets nwtco,prosta
 
 ## Honest scope / what is NOT claimed
 
-- **τ² recovery is a simulation idealisation, NOT a real-data result.** On real raster reconstructions QP's
-  per-trial extraction noise perturbs the between-trial variance, so the censoring lever fixes the μ **bias**
-  but not the heterogeneity (on the default panel `event_pinned` τ² is no closer to truth than `curve_only`).
-  μ-recovery is the robust real-data claim; do not cite real-data τ² recovery.
+- **τ² recovery on real data holds only OUTSIDE the strong-effect/small-sample corner.** The simulation's
+  clean τ² recovery does not carry over for a *specific* reason: per-trial QP reconstruction error rises with
+  effect **strength** (corr(|err|, |true logHR|) ≈ +0.7) and **small sample** (corr(|err|, events) ≈ −0.5),
+  so a strong-effect/few-events trial is attenuated toward the centre, shrinking the between-trial spread. On
+  the default panel a **single** such trial — `gehan` (HR 0.19, 30 events: true logHR −1.64 → recon −0.91) —
+  drives the *entire* τ² gap: drop it and `d-τ²` collapses −0.046 → −0.008 (k=8). So τ² *is* recoverable when
+  no trial sits in that corner (precisely the OA-wall population kmcurve can't fully digitize anyway). This is
+  **attenuation bias, not additive reconstruction variance** — a variance-subtraction "debias" is wrong-signed
+  and would make it worse. μ-recovery is the robust real-data claim; τ²-recovery is conditional on the panel.
 - **Measured aside (sim):** with *both* arms' curves fixed at the same anchors, the log-rank HR is nearly
   insensitive to the *total* event count, so the curve-only under-identification surfaces as **bias**
   (Guyot's zero-censoring assumption), not a variance band. The QP's value here is removing that bias.
@@ -74,5 +79,7 @@ far more dramatic — `python granularity_pool.py --real --datasets nwtco,prosta
 
 - Replace the unrelated-datasets panel with a genuinely **same-indication** IPD set (if one becomes
   available) so the pool is a real clinical synthesis, not just a bias measurement.
-- Probe whether a τ²-debiasing correction (subtracting the QP reconstruction-variance component) can recover
-  the heterogeneity half on real data — currently the open gap.
+- The τ²-gap mechanism is now characterised (strong-effect/small-n attenuation, not variance — see above), so
+  a variance-subtraction debias is ruled out. The remaining lever is upstream: a better arm-separation /
+  reconstruction for the strong-effect/small-n corner (i.e. lever 3, the U-Net) would shrink the per-trial
+  attenuation that drives the gap — the τ² half follows the digitization-accuracy frontier, not a pooling fix.

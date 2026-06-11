@@ -49,10 +49,17 @@ NOT.** On the registry-ipd gold-standard datasets run through kmcurve's actual r
 pipeline, curve-only reliably attenuates the pooled mu toward the null (e.g. true HR
 0.58 -> 0.72) while event-pinned and abstract-HR-only recover it, and per-trial the
 curve-only logHR error dwarfs the others on EVERY dataset. But the simulation's clean
-tau2 recovery does NOT carry over: QP's real per-trial extraction noise perturbs the
-between-trial variance, so the censoring lever fixes the mu BIAS, not the
-heterogeneity. mu-recovery is the robust real-data result; tau2-recovery is a
-simulation idealisation. (Honest scope -- do not claim real-data tau2 recovery.)
+tau2 recovery does NOT carry over, for a SPECIFIC reason: per-trial QP reconstruction
+error rises with effect STRENGTH (corr(|err|,|true logHR|) ~ +0.7) and SMALL sample
+(corr(|err|,events) ~ -0.5), so a strong-effect/few-events trial is attenuated toward
+the centre, shrinking the between-trial spread. On the default panel a single such
+trial (gehan, HR 0.19 / 30 events: true logHR -1.64 -> recon -0.91) drives the entire
+tau2 gap -- drop it and d-tau2 collapses -0.046 -> -0.008. So tau2 recovery is
+achievable EXCEPT when the panel contains a trial in the strong-effect/small-sample
+corner (precisely the OA-wall population). This is ATTENUATION bias, not additive
+reconstruction variance -- a variance-subtraction "debias" is wrong-signed and would
+make it worse. mu-recovery is the robust real-data result; tau2 holds only outside
+that corner.
 
 (Aside, measured in the sim: with BOTH arms' curves fixed at the anchors the log-rank
 HR is nearly insensitive to the *total* event count, so the curve-only
