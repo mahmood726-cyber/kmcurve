@@ -12,7 +12,11 @@ from typing import List, Dict, Optional
 import json
 import pandas as pd
 from multiprocessing import Pool, cpu_count
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except ImportError:  # tqdm is just a progress bar -- degrade gracefully if absent
+    def tqdm(iterable=None, *args, **kwargs):
+        return iterable if iterable is not None else []
 import traceback
 
 sys.path.insert(0, str(Path(__file__).parent))
