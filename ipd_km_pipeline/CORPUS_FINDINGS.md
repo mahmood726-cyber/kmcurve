@@ -857,3 +857,36 @@ ADAURA), and (b) a **percentage→count extension** (events ≈ rate × registry
 recall, since abstracts post rates far more often than counts. That extension is the well-scoped next
 build; the count-only lever alone is near-zero-recall on the strong-trial set. Reproduce:
 `python fusion_forward_finder.py --query "overall survival" --max-ncts 1500 --min-sep 0.4`.
+
+### Abstract-event lever BUILT — honest negative: it does not autonomously validate a strong pair — 2026-06-11
+
+`fusion_abstract_lever.py` implements the lever end-to-end: primary-PMID resolver (PubMed `<nct>[si]`
+search, skips comments/replies/errata — the forward finder's `result_pmid` had picked an NEJM *Reply* for
+ADAURA), reuse of registry-ipd's validated X-of-N `abstract_events.extract_events`, plus a
+percentage→event-fraction extension, then registry curve anchors + abstract events → Titman-QP → HR vs the
+posted strong HR. Run on the 7 forward-finder strong trials:
+
+**HIGH-confidence (X-of-N count) validations: 0/7.** None of the 7 abstracts print a per-arm "X of N"
+event count for the curve's endpoint — they give the HR and/or percentages. So registry-ipd's *safe* lever
+has **zero recall** on this strong-trial set (consistent with their 1/161-abstract precision-first finding).
+
+**The percentage extension is UNRELIABLE — a textbook silent-substitution trap.** First cut "validated"
+NCT01721772 (CheckMate-066) at fold 1.06 — but it had read the **1-year *survival* rates** (72.9% / 42.1%)
+as *event* rates (the clause also contained "hazard ratio for death", which fooled the keyword guard). The
+0.42-≈-posted match was **coincidental on wrong inputs**. Fixes added: (a) classify each % by its LOCAL
+governor as survivors (→ event fraction 1−p) vs events (→ p), with comparator-inheritance for the 2nd arm;
+(b) a near-equal-fraction gate (strongly-separated trials cannot have ~equal per-arm event fractions —
+NCT00699816 RFS 0.63 extracted [108,106] → **inverted HR 1.45**; NCT04737187 [234,234] — both now rejected).
+After the fixes only NCT01721772 survives, flagged **LOW-confidence / needs-verification** ([11,56] is
+still implausibly low for PFS — likely the wrong percentages again). Net: free-text abstracts carry many
+percentages (response, disease-control, AE, survival-at-various-t) and the extractor cannot reliably pick
+the *primary-endpoint event rate*, so the percentage path is shipped gated + flagged, **not** as a
+validation.
+
+**Conclusion.** The abstract-event lever is sound *when the abstract posts an X-of-N count for the right
+endpoint* (registry-ipd's hand-verified RADIANT-4), but it does **not generalize to autonomous strong-pair
+validation**: the safe count path is ~0 recall, and the percentage path is too error-prone to trust
+unverified. The honest, defensible strong-separation validations remain the **registry-only mechanism**
+demonstrations (RADIANT-4 HR 0.48 in `fusion_real_trial.py`; the 42-dataset `realipd_benchmark.py --fusion`
+median fold 1.05). PALOMA-3 stays the only *figure*-end-to-end pair. +6 tests
+(`test_fusion_abstract_lever.py`). Reproduce: `python fusion_abstract_lever.py`.
