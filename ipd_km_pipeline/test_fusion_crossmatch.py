@@ -66,3 +66,43 @@ def test_needs_three_timepoints_and_results():
 def test_is_timepoint_helper():
     assert X._is_timepoint("Month 6") and X._is_timepoint("24 months") and X._is_timepoint("12")
     assert not X._is_timepoint("Sex: Male") and not X._is_timepoint("Race: Caucasian")
+
+
+def test_endpoint_key_families():
+    assert X._endpoint_key("Overall Survival (OS)") == "os"
+    assert X._endpoint_key("Progression-Free Survival (PFS)") == "pfs"
+    assert X._endpoint_key("Disease-free Survival") == "dfs"
+    # PFS/DFS must win over the bare 'survival' that 'os' would otherwise catch
+    assert X._endpoint_key("Progression-free survival (overall)") == "pfs"
+    # a generic survival-probability curve title is NOT a known endpoint
+    assert X._endpoint_key("Survival Probabilities at Year 1, Year 2, and Year 3") is None
+
+
+def test_does_not_borrow_mismatched_endpoint_hr():
+    """PALOMA-3 / NCT01942135 regression: the curve is an OS 'Survival
+    Probabilities' measure (no HR); the only posted HR (0.422) is PFS. The old
+    'any survival HR in the trial' logic glued the PFS HR onto the OS curve.
+    Now the endpoint must match -> the generic OS curve gets NO HR."""
+    study = _study([
+        _km_measure("Progression-Free Survival (PFS)", ["Median"], n_groups=2,
+                    param="MEDIAN", hr=("0.422", "0.318", "0.560")),
+        _km_measure("Survival Probabilities at Year 1, Year 2, and Year 3",
+                    ["Year 1", "Year 2", "Year 3"], n_groups=2, param="NUMBER"),
+    ])
+    km = X._km_from_study(study, "NCT01942135")["km"]
+    assert km is not None and km["n_timepoints"] == 3       # the curve is still detected
+    assert km["hr"] is None and km["hr_endpoint_matched"] is False   # but no mismatched HR
+
+
+def test_borrows_hr_from_sibling_measure_same_endpoint():
+    """The legitimate cross-measure case: an OS curve carries no HR, but a sibling
+    OS median measure does -> the SAME-endpoint HR is attached."""
+    study = _study([
+        _km_measure("Overall Survival (OS)", ["Year 1", "Year 2", "Year 3"],
+                    n_groups=2, param="NUMBER"),                     # curve, no HR
+        _km_measure("Overall Survival (OS)", ["Median"], n_groups=2,
+                    param="MEDIAN", hr=("0.81", "0.64", "1.03")),    # HR sibling
+    ])
+    km = X._km_from_study(study, "NCTos")["km"]
+    assert km["hr"]["value"] == "0.81" and km["hr_endpoint_matched"] is True
+    assert km["hr"]["endpoint"] == "os"

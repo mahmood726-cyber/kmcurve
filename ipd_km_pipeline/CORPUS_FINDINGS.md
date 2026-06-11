@@ -674,3 +674,42 @@ ground truth for an end-to-end NAR fusion. The bottleneck was corpus size *and* 
 filtering; both now addressed. The narrower count also re-confirms the open-access gap (most HR-posting
 trials' OA mentions are reviews, not primaries). Reproduce:
 `python fusion_crossmatch.py --corpus corpus_pmc --out fusion_candidates.json`.
+
+## CORRECTION: the "1 usable-with-HR" pair was an ENDPOINT MISMATCH — 2026-06-11
+
+Verifying `NCT01942135` (PALOMA-3) before running the end-to-end fusion **refuted the
+validation-grade claim above**. The crossmatch had paired the curve with the wrong endpoint's HR:
+
+- the selected **curve** is the OS measure *"Survival Probabilities at Year 1, Year 2, and Year 3"*
+  (paramType NUMBER, 3 timepoints) — which posts **no HR**;
+- the attached **HR 0.422 (0.318–0.560) is the PFS primary** (median 9.2 vs 3.8 mo), a *different
+  endpoint*;
+- the trial's actual **OS HR is 0.814 (0.644–1.029)** — not even significant, and on yet another measure.
+
+Root cause: `_km_from_study` borrowed *any* survival HR posted *anywhere* in the trial (the code comment
+even acknowledged "the curve measure often differs from the measure carrying the HR analysis"). Most
+trials post several survival endpoints (OS, PFS, DFS, TTR…), so "any survival HR" silently glues a
+mismatched HR onto the curve. This is the sibling bug to the NMA over-count above — both are the crossmatch
+asserting a link it never verified.
+
+**Fix (`_endpoint_key` + `_hr_for_endpoint`):** an HR may now be attached only from an outcome measure
+whose **endpoint family matches the curve's** (os / pfs / dfs / efs / rfs / mfs / ttp / ttd / ttr). A
+generic curve title that names no endpoint (e.g. "Survival Probabilities at Year…") yields `None` → no HR
+(better null than wrong). Candidates now carry `curve_endpoint` + `hr_endpoint_matched` for audit.
+
+The fix corrected **three** mismatches across the 6 candidates, confirming it is systematic, not a one-off:
+
+| NCT | curve endpoint | old "any-HR" | corrected (endpoint-matched) |
+|---|---|---:|---:|
+| NCT01942135 | OS (generic title) | PFS 0.422 | **None** |
+| NCT01121393 | Time-to-response | PFS 0.281 | **None** |
+| NCT00636168 | OS | RFS 0.75 | **OS 0.72** (re-matched, not dropped) |
+
+**Revised honest count at 1500 PDFs: 3 fusion-usable primaries, `n_usable_with_hr` = 1 → `0`.** There is
+**no endpoint-matched curve + HR + figure pair yet** — the confirmatory-RCT open-access gap persists, and
+the earlier "first validation-grade pair" was an artifact of unverified endpoint linkage. PMC9662922 /
+PMC7530824 / PMC13006393 remain valid **end-to-end OCR-pipeline demo targets** (real figure + at-risk
+table + exact registry curve anchors), just not HR-validation-grade. Tests: +3
+(`test_does_not_borrow_mismatched_endpoint_hr`, `test_borrows_hr_from_sibling_measure_same_endpoint`,
+`test_endpoint_key_families`). Reproduce (offline; detector change re-detects from cache, no refetch):
+`python fusion_crossmatch.py --corpus corpus_pmc --out fusion_candidates.json`.

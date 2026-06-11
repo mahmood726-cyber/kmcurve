@@ -173,26 +173,68 @@ def _is_timepoint(class_title: str) -> bool:
     return bool(_TIME_RE.search(t))
 
 
+# Endpoint families, ordered specific -> general (PFS/DFS contain "survival" too,
+# so test them before the bare "overall survival"/"os" patterns).
+_ENDPOINT_FAMILIES = (
+    ("pfs", ("progression-free", "progression free", "(pfs)")),
+    ("dfs", ("disease-free", "disease free", "(dfs)")),
+    ("efs", ("event-free", "event free", "(efs)")),
+    ("rfs", ("recurrence-free", "recurrence free", "relapse-free", "relapse free",
+             "(rfs)")),
+    ("mfs", ("metastasis-free", "metastasis free", "(mfs)")),   # incl. distant MFS
+    ("ttp", ("time to progression",)),
+    ("ttd", ("time to deterioration",)),
+    ("ttr", ("time to objective response", "time to response", "time to next")),
+    ("os", ("overall survival", "(os)")),
+)
+
+
+def _endpoint_key(title: str) -> Optional[str]:
+    """Normalise an outcome-measure title to its survival endpoint family
+    (os/pfs/dfs/...), or None when the title is too generic to identify one
+    (e.g. 'Survival Probabilities at Year 1, Year 2, and Year 3').
+
+    This is the linkage key for attaching a posted HR to a curve: a hazard ratio
+    may only be borrowed from a DIFFERENT outcome measure when that measure is the
+    SAME endpoint as the curve. A generic curve title yields None, so no HR is
+    attached -- the safe choice (better null than a mismatched HR)."""
+    t = (title or "").lower()
+    for key, kws in _ENDPOINT_FAMILIES:
+        if any(k in t for k in kws):
+            return key
+    return None
+
+
+def _hr_for_endpoint(oms: list, endpoint: Optional[str]) -> Optional[dict]:
+    """The posted HR from the outcome measure(s) whose endpoint MATCHES the
+    curve's. A curve and its HR often live on different outcome measures (e.g. an
+    OS 'Survival Probabilities' curve vs an 'Overall Survival' median+HR measure),
+    but they must be the SAME endpoint -- borrowing any survival HR in the trial
+    silently pairs, e.g., a PFS HR with an OS curve (PALOMA-3/NCT01942135: OS
+    curve, PFS HR 0.42 -- the real OS HR was 0.81). If the curve endpoint is
+    unidentifiable (generic title -> None), no HR is attached."""
+    if endpoint is None:
+        return None
+    for om in oms:
+        if _endpoint_key(om.get("title") or "") != endpoint:
+            continue
+        for a in (om.get("analyses") or []):
+            if "hazard" in (a.get("paramType") or "").lower():
+                return {"value": a.get("paramValue"),
+                        "ci": [a.get("ciLowerLimit"), a.get("ciUpperLimit")],
+                        "endpoint": endpoint}
+    return None
+
+
 def _km_from_study(d: dict, nct: str) -> dict:
     """Pure parse: detect a posted KM-estimate CURVE (a survival-probability
-    outcome with >=3 TIMEPOINT classes -- not a subgroup/median table) and a
-    posted HR (from any survival analysis in the trial)."""
+    outcome with >=3 TIMEPOINT classes -- not a subgroup/median table) and an
+    ENDPOINT-MATCHED posted HR (only from a measure of the same survival
+    endpoint as the curve -- see _hr_for_endpoint)."""
     if not d.get("hasResults"):
         return {"nct": nct, "has_results": False}
     oms = (d.get("resultsSection", {}).get("outcomeMeasuresModule", {})
            .get("outcomeMeasures", []))
-    # any survival HR posted anywhere in the trial (the curve measure often
-    # differs from the measure carrying the HR analysis)
-    trial_hr = None
-    for om in oms:
-        if any(k in (om.get("title") or "").lower() for k in _SURV_KW):
-            for a in (om.get("analyses") or []):
-                if "hazard" in (a.get("paramType") or "").lower():
-                    trial_hr = {"value": a.get("paramValue"),
-                                "ci": [a.get("ciLowerLimit"), a.get("ciUpperLimit")]}
-                    break
-        if trial_hr:
-            break
     best = None
     for om in oms:
         title = (om.get("title") or "")
@@ -204,9 +246,12 @@ def _km_from_study(d: dict, nct: str) -> dict:
         n_groups = len(om.get("groups", []))
         if is_surv and is_curve_param and n_tp >= 3 and n_groups >= 2:
             cand = {"title": title[:80], "n_timepoints": n_tp, "param": param,
-                    "n_groups": n_groups, "hr": trial_hr}
+                    "n_groups": n_groups, "endpoint": _endpoint_key(title)}
             if best is None or n_tp > best["n_timepoints"]:
                 best = cand
+    if best is not None:
+        best["hr"] = _hr_for_endpoint(oms, best["endpoint"])
+        best["hr_endpoint_matched"] = best["hr"] is not None
     return {"nct": nct, "has_results": True, "km": best}
 
 
@@ -278,6 +323,8 @@ def run(corpus_dir: Path, limit: Optional[int] = None) -> dict:
                     "n_timepoints": km["n_timepoints"], "n_groups": km.get("n_groups"),
                     "posted_hr": (km.get("hr") or {}).get("value"),
                     "posted_ci": (km.get("hr") or {}).get("ci"),
+                    "curve_endpoint": km.get("endpoint"),
+                    "hr_endpoint_matched": km.get("hr_endpoint_matched", False),
                     "outcome": km["title"],
                     "pdf_likely_primary": cls["likely_primary"], "pdf_has_at_risk": cls["has_at_risk"],
                     "fusion_usable": cls["fusion_usable"],
