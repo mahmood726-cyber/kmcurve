@@ -754,8 +754,37 @@ against the correct endpoint's posted HR: registry-only falls outside the CI (an
 and the figure's event counts pull fusion to 0.784 — inside the posted CI, ~4% error — reproducing the
 RADIANT-4 identifiability-trap pattern on a self-discovered pair. Honest scope: 3 sparse landmark anchors
 (yr 1/2/3) + ctgov-posted death counts; OS HR ≈ 1 (non-significant OS) is a *harder* target than a
-well-separated curve. In full production kmcurve OCRs the identical "N (events)" from PMC9662922's figure
-(the raster_km step); here the count is the registry-posted death total. Tests: +2 more crossmatch
+well-separated curve. Tests: +2 more crossmatch
 (`test_endpoint_key_resolves_generic_title_via_description`,
-`test_paloma3_pair_uses_os_hr_not_pfs_via_description`) + `test_fusion_paloma3.py` (2). Reproduce:
+`test_paloma3_pair_uses_os_hr_not_pfs_via_description`) + `test_fusion_paloma3.py`. Reproduce:
 `python fusion_paloma3.py`.
+
+### Figure-OCR closes the loop — the censoring is read off the ACTUAL figure (no ctgov events) — 2026-06-11
+
+The result above still used the ctgov-posted death total as the event count. The last simulated link is
+now removed: `fusion_paloma3.py --ocr-pdf` (default `corpus_pmc/PMC9662922.pdf`) OCRs the numbers-at-risk
+table **off the real figure** via `raster_km` — caption-anchored locate → dual-OCR x-axis calibration
+(RANSAC, **R²=1.0000**, fail-closed) → at-risk band read → rows mapped to arms by baseline N. The figure's
+table reads cleanly at 6-month columns:
+
+| arm | baseline N | OCR'd at-risk (months 0→72) |
+|---|---:|---|
+| Palbociclib + Fulvestrant | **347** (= registry N) | 347, 322, 288, 250, 211, 167, 149, 128, 109, 84, 68, 60, 54 |
+| Placebo + Fulvestrant | **174** (= registry N) | 174, 156, 138, 117, 89, 71, 58, 43, 33, 22, 19, 17 |
+
+(no parenthetical "(events)" are printed — the NAR profile, not an event count, is the figure's censoring
+signal; so the fusion uses Guyot+NAR rather than the QP+total-events backend.) Feeding this figure-derived
+table to Guyot against the same registry OS anchors:
+
+| reconstruction | OS HR | fold vs 0.814 | inside CI? |
+|---|---:|---:|:--:|
+| registry-only (anchors, NO censoring) | 1.119 | 1.374 | ❌ |
+| **FUSION (anchors + FIGURE-OCR'd NAR)** | **0.781** | **1.043 (~4%)** | ✅ |
+| (cross-check: posted-event QP fusion) | 0.784 | 1.038 | ✅ |
+
+**Now fully end-to-end: the ONLY external input is the registry's exact curve anchors; all censoring comes
+from OCR-ing PMC9662922's figure.** The figure-OCR fusion (0.781) and the posted-event fusion (0.784) agree
+to <0.4% and both land inside the posted 95% CI — they cross-validate each other. This is the complete
+two-project NAR fusion (registry curve ⊕ kmcurve at-risk OCR) demonstrated on a self-discovered, HR-posting
+real pair. +1 guarded integration test (`test_figure_ocr_nar_fusion_inside_ci`, skips without the corpus
+PDF / RapidOCR). Reproduce: `python fusion_paloma3.py`.

@@ -6,10 +6,12 @@ Locks in the headline: against the CORRECT OS HR 0.814 (not the PFS 0.42),
 registry-only Guyot falls OUTSIDE the posted CI while events-informed FUSION
 lands INSIDE it -- the whole point of fixing the endpoint linkage."""
 import json
+from pathlib import Path
+
+import pytest
 
 import fusion_paloma3 as P
 from fusion_real_trial import run_trial
-from pathlib import Path
 
 
 # PALOMA-3 OS landmark survival (ctgov-posted KM estimate, year 1/2/3), N per arm.
@@ -49,6 +51,39 @@ def test_paloma3_os_fusion_inside_ci_registry_outside(monkeypatch, tmp_path):
     registry_inside = lo <= res["registry_only_hr"] <= hi
     assert fusion_inside and not registry_inside          # the headline of the fix
     assert res["fusion_fold"] < 1.15                      # events-informed within ~15% of truth
+
+
+_PDF = Path(__file__).resolve().parent / "corpus_pmc" / "PMC9662922.pdf"
+
+
+def _ocr_deps_ok():
+    try:
+        import rapidocr_onnxruntime  # noqa: F401
+        import figure_locator  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _PDF.exists(), reason="PMC9662922.pdf not present (gitignored corpus)")
+@pytest.mark.skipif(not _ocr_deps_ok(), reason="rapidocr/figure_locator unavailable")
+def test_figure_ocr_nar_fusion_inside_ci(monkeypatch, tmp_path):
+    """End-to-end: OCR the at-risk table off the REAL PMC9662922 figure (no ctgov
+    events) -> Guyot+NAR fusion lands inside the posted OS CI; registry-only does
+    not. The HR ground truth is mocked (no network); the OCR + reconstruction are
+    real."""
+    monkeypatch.setattr(P, "_fetch_os", lambda nct: (_DEATHS, _OS_HR))
+    cohort = tmp_path / "NCT01942135.json"
+    cohort.write_text(json.dumps(_COHORT))
+
+    r = P.run_ocr_fusion(cohort, str(_PDF))
+    # the at-risk baselines OCR'd off the figure match the registry arm sizes
+    bases = sorted(d["n_at_risk"][0] for d in r["nar_arms"].values())
+    assert bases == [174, 347]
+    lo, hi = float(r["posted_ci"][0]), float(r["posted_ci"][1])
+    assert lo <= r["ocr_nar_fusion_hr"] <= hi              # figure-only fusion inside CI
+    assert not (lo <= r["registry_only_hr"] <= hi)         # registry-only outside
+    assert r["ocr_nar_fusion_fold"] < 1.2
 
 
 def test_build_trial_fails_closed_without_os_hr(monkeypatch, tmp_path):
