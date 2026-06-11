@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -30,6 +31,47 @@ EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 EPMC_PDF = "https://europepmc.org/articles/PMC{id}?pdf=render"
 DEFAULT_QUERY = '"kaplan-meier"[Body] AND randomized AND open access[filter]'
 _UA = "Mozilla/5.0 (KMcurve-corpus research)"
+_LOCK_STALE_S = 300  # a lock not refreshed within this is considered abandoned
+
+
+def _write_json_atomic(path: Path, obj) -> None:
+    """Write JSON via a temp file + os.replace so the manifest is never left
+    truncated by an interrupted or concurrent write (os.replace is atomic on
+    both POSIX and Windows)."""
+    tmp = path.with_suffix(path.suffix + f".tmp{os.getpid()}")
+    tmp.write_text(json.dumps(obj, indent=2))
+    os.replace(tmp, path)
+
+
+class _AcquireLock:
+    """Cooperative single-writer lock for an acquisition output dir, so two
+    acquire() processes can't race read-modify-write on the same manifest (the
+    cause of a blacklist-clobbering race when a TaskStop-zombie kept running).
+    The lockfile carries a heartbeat timestamp refreshed on each manifest flush;
+    a stale lock (process died/zombie hung > _LOCK_STALE_S) is taken over."""
+
+    def __init__(self, out_dir: Path):
+        self.path = out_dir / ".acquire.lock"
+
+    def __enter__(self):
+        if self.path.exists():
+            age = time.time() - self.path.stat().st_mtime
+            if age < _LOCK_STALE_S:
+                raise RuntimeError(
+                    f"another acquisition holds {self.path} (fresh {age:.0f}s ago); "
+                    f"refusing to run two writers on the same manifest")
+        self.refresh()
+        return self
+
+    def refresh(self):
+        self.path.write_text(f"{os.getpid()} {time.time()}")
+
+    def __exit__(self, *exc):
+        try:
+            self.path.unlink()
+        except OSError:
+            pass
+        return False
 
 
 def _get(url: str, timeout: int = 30, retries: int = 4, max_seconds: float = 90.0) -> bytes:
@@ -241,74 +283,78 @@ def acquire(query: str, n: int, out_dir: Path, sleep: float = 0.34,
     new PDFs, so an interrupted multi-hour run keeps what it acquired."""
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = out_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"pdfs": []}
-    manifest.setdefault("no_pdf", [])  # PMCIDs with no renderable PDF (permanent)
-    # `have` skips both downloaded AND known-dead ids, so a re-run does NOT
-    # re-attempt the permanently-failing ids (HTTP 500 / interstitial) scattered
-    # through the relevance list -- the cause of restarts stalling on dead PDFs.
-    have = {e["pmcid"] for e in manifest["pdfs"]} | set(manifest["no_pdf"])
+    # Single-writer lock (refuses a second concurrent acquisition) + atomic
+    # manifest writes, so a race/zombie can neither corrupt nor truncate it.
+    with _AcquireLock(out_dir) as lock:
+        manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"pdfs": []}
+        manifest.setdefault("no_pdf", [])  # PMCIDs with no renderable PDF (permanent)
+        # `have` skips both downloaded AND known-dead ids, so a re-run does NOT
+        # re-attempt the permanently-failing ids (HTTP 500 / interstitial) scattered
+        # through the relevance list -- the cause of restarts stalling on dead PDFs.
+        have = {e["pmcid"] for e in manifest["pdfs"]} | set(manifest["no_pdf"])
 
-    # Reconcile: adopt any PMC*.pdf already on disk but missing from the manifest
-    # (recovers PDFs from a run killed before its last flush, so they are never
-    # re-downloaded). Filenames are written as PMC<id>.pdf by fetch_pdf().
-    adopted = 0
-    for p in sorted(out_dir.glob("PMC*.pdf")):
-        pmcid = p.stem[3:]  # strip "PMC"
-        if pmcid and pmcid not in have:
-            manifest["pdfs"].append({"pmcid": pmcid, "pdf": p.name})
-            have.add(pmcid)
-            adopted += 1
-    if adopted:
-        manifest_path.write_text(json.dumps(manifest, indent=2))
-        print(f"  reconciled {adopted} orphan PDF(s) into manifest")
+        # Reconcile: adopt any PMC*.pdf already on disk but missing from the manifest
+        # (recovers PDFs from a run killed before its last flush, so they are never
+        # re-downloaded). Filenames are written as PMC<id>.pdf by fetch_pdf().
+        adopted = 0
+        for p in sorted(out_dir.glob("PMC*.pdf")):
+            pmcid = p.stem[3:]  # strip "PMC"
+            if pmcid and pmcid not in have:
+                manifest["pdfs"].append({"pmcid": pmcid, "pdf": p.name})
+                have.add(pmcid)
+                adopted += 1
+        if adopted:
+            _write_json_atomic(manifest_path, manifest)
+            print(f"  reconciled {adopted} orphan PDF(s) into manifest")
 
-    got, skipped = 0, {"no_pdf": 0, "error": 0, "dup": 0}
-    retstart = 0
-    since_flush = 0
-    while got < n:
-        ids = esearch_pmc(query, page, retstart=retstart)  # next page
-        if not ids:
-            print(f"  esearch exhausted at retstart={retstart}")
-            break
-        retstart += len(ids)
-        for pmcid in ids:
-            if got >= n:
+        got, skipped = 0, {"no_pdf": 0, "error": 0, "dup": 0}
+        retstart = 0
+        since_flush = 0
+        while got < n:
+            ids = esearch_pmc(query, page, retstart=retstart)  # next page
+            if not ids:
+                print(f"  esearch exhausted at retstart={retstart}")
                 break
-            if pmcid in have:
-                skipped["dup"] += 1
-                continue
-            have.add(pmcid)  # don't re-attempt within this run
-            try:
-                pdf = fetch_pdf(pmcid, out_dir)
-                time.sleep(sleep)
-                if pdf is None:
+            retstart += len(ids)
+            for pmcid in ids:
+                if got >= n:
+                    break
+                if pmcid in have:
+                    skipped["dup"] += 1
+                    continue
+                have.add(pmcid)  # don't re-attempt within this run
+                try:
+                    pdf = fetch_pdf(pmcid, out_dir)
+                    time.sleep(sleep)
+                    if pdf is None:
+                        skipped["no_pdf"] += 1
+                        manifest["no_pdf"].append(pmcid)  # interstitial = permanent
+                    else:
+                        manifest["pdfs"].append({"pmcid": pmcid, "pdf": pdf.name})
+                        got += 1
+                        print(f"  [{got}/{n}] PMC{pmcid}  {pdf.stat().st_size // 1024} KB")
+                    since_flush += 1                       # success OR blacklist mutated
+                except urllib.error.HTTPError as exc:
+                    # 404/410/403/500 = no renderable PDF -> blacklist so future runs
+                    # skip it instead of re-failing the same dead id every restart.
                     skipped["no_pdf"] += 1
-                    manifest["no_pdf"].append(pmcid)  # interstitial = permanent
-                else:
-                    manifest["pdfs"].append({"pmcid": pmcid, "pdf": pdf.name})
-                    got += 1
-                    print(f"  [{got}/{n}] PMC{pmcid}  {pdf.stat().st_size // 1024} KB")
-                since_flush += 1                       # success OR blacklist mutated
-            except urllib.error.HTTPError as exc:
-                # 404/410/403/500 = no renderable PDF -> blacklist so future runs
-                # skip it instead of re-failing the same dead id every restart.
-                skipped["no_pdf"] += 1
-                manifest["no_pdf"].append(pmcid)
-                since_flush += 1
-            except Exception as exc:
-                # transient (timeout / DNS getaddrinfo) -- do NOT blacklist; a
-                # later run retries it.
-                skipped["error"] += 1
-                print(f"  skip PMC{pmcid}: {type(exc).__name__}: {exc}")
-            # Flush every ``flush_every`` manifest mutations (downloads AND
-            # blacklist entries) so a failure-heavy run killed before its next
-            # success still persists the dead-id blacklist it accumulated.
-            if since_flush >= flush_every:
-                manifest_path.write_text(json.dumps(manifest, indent=2))
-                since_flush = 0
-    manifest_path.write_text(json.dumps(manifest, indent=2))
-    print(f"\nacquired {got} new PDFs (total {len(manifest['pdfs'])}); skipped {skipped}")
-    return manifest
+                    manifest["no_pdf"].append(pmcid)
+                    since_flush += 1
+                except Exception as exc:
+                    # transient (timeout / DNS getaddrinfo) -- do NOT blacklist; a
+                    # later run retries it.
+                    skipped["error"] += 1
+                    print(f"  skip PMC{pmcid}: {type(exc).__name__}: {exc}")
+                # Flush every ``flush_every`` manifest mutations (downloads AND
+                # blacklist entries) so a failure-heavy run killed before its next
+                # success still persists the dead-id blacklist it accumulated.
+                if since_flush >= flush_every:
+                    _write_json_atomic(manifest_path, manifest)
+                    lock.refresh()                     # heartbeat: keep the lock fresh
+                    since_flush = 0
+        _write_json_atomic(manifest_path, manifest)
+        print(f"\nacquired {got} new PDFs (total {len(manifest['pdfs'])}); skipped {skipped}")
+        return manifest
 
 
 if __name__ == "__main__":
