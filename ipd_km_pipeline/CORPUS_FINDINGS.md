@@ -788,3 +788,43 @@ to <0.4% and both land inside the posted 95% CI — they cross-validate each oth
 two-project NAR fusion (registry curve ⊕ kmcurve at-risk OCR) demonstrated on a self-discovered, HR-posting
 real pair. +1 guarded integration test (`test_figure_ocr_nar_fusion_inside_ci`, skips without the corpus
 PDF / RapidOCR). Reproduce: `python fusion_paloma3.py`.
+
+## Hunting a STRONGLY-SEPARATED pair: targeted acquisition surfaces them, but the OA wall holds at the figure level — 2026-06-11
+
+PALOMA-3's OS HR 0.814 (≈1, non-significant OS) is a flat, low-signal target — the reconstruction error is
+hard to see against a tiny true effect. So we hunted a strongly-separated pair (HR far from 1). Two levers:
+
+1. **Targeted acquisition.** `acquire_corpus.py --n 1200 --query '"kaplan-meier"[Body] AND "hazard
+   ratio"[Body] AND ("phase 3" OR "overall survival") AND randomized AND open access'` — biased toward
+   HR-posting 2-arm RCT primaries (vs the generic default). Grew the corpus 1500 → ~2120.
+2. **Separation ranking.** `fusion_crossmatch` now emits `hr_separation` (|log HR|) per candidate and a
+   `best_validation_target` (most-separated usable + endpoint-matched pair), so a re-scan auto-flags it.
+
+**The hunt found strongly-separated trials — the discovery machinery works.** On the grown corpus the
+endpoint-matched candidates spanned the effect range at last, e.g.: FLAURA / NCT02296125 (PFS **0.46**,
+sep 0.78), CAPItello-291 / NCT04305496 (PFS **0.60**, sep 0.51), APHINITY / NCT02586025 (EFS **0.53**),
+NCT01844505 (OS 0.63), NCT01721772 / NCT04737187 (PFS 0.44). Raw `n_usable_with_hr` jumped 1 → 5.
+
+**But every strongly-separated pair failed figure extraction — the OA wall, now at the figure level.**
+Verifying each candidate with the actual pipeline (`figure_locator` → `detect_plot_box`):
+- FLAURA (PMC7935816) and CAPItello (PMC12064754, PMC9630162): the locator finds **no** KM figure at all
+  (the OA paper citing the trial is a secondary/subgroup report, not the clean 2-arm primary);
+- APHINITY (PMC10925021): a **multi-panel subgroup** figure whose at-risk baselines (110/205) don't match
+  the registry arm sizes (210/105) — wrong cohort, not the primary;
+- ctgov posts no per-arm PFS/EFS **event counts** for these, so the posted-event fallback is out too.
+
+**This exposed a real over-count and a fix.** `classify_pdf`'s `has_at_risk` is a TEXT regex ("at risk"
+appears) — it flagged FLAURA/CAPItello usable though they have no extractable figure. New
+`figure_extractable(pdf)` confirms usability with the extraction pipeline, and `fusion_usable` now requires
+it. After the gate, on 2121 PDFs: **`n_fusion_usable` 7 → 1, `n_usable_with_hr` 5 → 1** — only PALOMA-3
+(extractable), and `best_validation_target` correctly falls back to it. (+4 tests; full suite 86 pass.)
+
+**Conclusion (sharper than before): the open-access anti-correlation holds at the figure-extraction level.**
+A targeted query *can* surface strongly-separated HR-posting trials in the OA corpus, but their open-access
+appearances are subgroup/secondary papers without the clean 2-arm primary figure — the primaries with the
+extractable curve + at-risk table stay paywalled. **PALOMA-3 / PMC9662922 remains the single end-to-end
+validatable pair in the corpus** (flat HR notwithstanding). Higher-signal options that bypass the figure
+wall: (a) the registry-only mechanism validation already done at strong separation (RADIANT-4 HR 0.48,
+`fusion_real_trial.py`); (b) a ctgov-search → PMID → PMC-OA *forward* pairfinder targeting strong-HR 2-arm
+trials whose primary is OA. Reproduce: `python fusion_crossmatch.py --corpus corpus_pmc --out
+fusion_candidates.json` (reads `best_validation_target`).

@@ -118,6 +118,39 @@ def classify_pdf(pdf: Path) -> dict:
             "likely_primary": primary, "fusion_usable": bool(primary and at_risk)}
 
 
+def figure_extractable(pdf: Path) -> Optional[bool]:
+    """Does the PDF actually yield an EXTRACTABLE 2-arm KM figure (locator finds a
+    caption-anchored KM figure AND a plot box detects in it)?
+
+    `classify_pdf`'s `has_at_risk` is a TEXT regex -- the words 'at risk' appear --
+    which over-counts: a strong-effect trial's OA paper is often a subgroup/secondary
+    report that mentions 'at risk' but has no clean extractable primary figure
+    (FLAURA/NCT02296125, CAPItello/NCT04305496 -- strongly-separated HRs whose OA
+    PDFs locate NO figure; APHINITY/NCT02586025 -- a multi-panel subgroup figure
+    whose baselines don't match the registry N). This confirms fusion-usability with
+    the actual extraction pipeline. None if the figure/raster deps are unavailable
+    (so the scan degrades to the text heuristic rather than failing)."""
+    try:
+        import figure_locator as FL
+        from raster_km import render_page, detect_plot_boxes, detect_plot_box
+    except Exception:
+        return None
+    try:
+        cands = FL.locate_km_figures(str(pdf), require_caption=True)
+        if not cands:
+            return False
+        c = cands[0]
+        g = render_page(str(pdf), c.page_index, dpi=150)
+        if c.bbox:
+            sc = 150 / 72.0
+            x0, t, x1, b = c.bbox
+            g = g[int(t * sc):int(b * sc), int(x0 * sc):int(x1 * sc)]
+        boxes = detect_plot_boxes(g) or ([detect_plot_box(g)] if detect_plot_box(g) else [])
+        return any(bx is not None and min(bx.x1 - bx.x0, bx.y1 - bx.y0) >= 40 for bx in boxes)
+    except Exception:
+        return False
+
+
 def fetch_study(nct: str, sleep: float = 0.2) -> dict:
     """Fetch + TRIM a ctgov v2 study to the survival outcome measures (title,
     paramType, class titles, group count, HR analyses). Cached so re-detection
@@ -345,6 +378,7 @@ def run(corpus_dir: Path, limit: Optional[int] = None) -> dict:
         if study.get("hasResults"):
             n_with_results += 1
     pdf_class = {}   # classify each candidate PDF once (primary-with-figure vs review/NMA)
+    fig_ok = cache.setdefault("fig_ok", {})   # per-PDF figure-extractability (cached: render+OCR is slow)
     for pdf_name, ncts in pdf_ncts.items():
         for nct in ncts:
             km = _km_from_study(cache["nct_info"].get(nct, {}), nct).get("km")
@@ -352,6 +386,16 @@ def run(corpus_dir: Path, limit: Optional[int] = None) -> dict:
                 if pdf_name not in pdf_class:
                     pdf_class[pdf_name] = classify_pdf(corpus_dir / pdf_name)
                 cls = pdf_class[pdf_name]
+                # only the text-heuristic-usable PDFs are worth the expensive
+                # figure-locate check; confirm the figure actually extracts.
+                extractable = None
+                if cls["fusion_usable"]:
+                    if pdf_name not in fig_ok:
+                        fig_ok[pdf_name] = figure_extractable(corpus_dir / pdf_name)
+                        CACHE.write_text(json.dumps(cache))
+                    extractable = fig_ok[pdf_name]
+                # usable requires a REAL extractable figure (None = deps absent -> trust text)
+                usable = bool(cls["fusion_usable"] and extractable is not False)
                 candidates.append({
                     "pdf": pdf_name, "nct": nct,
                     "n_timepoints": km["n_timepoints"], "n_groups": km.get("n_groups"),
@@ -362,7 +406,8 @@ def run(corpus_dir: Path, limit: Optional[int] = None) -> dict:
                     "hr_separation": _hr_separation((km.get("hr") or {}).get("value")),
                     "outcome": km["title"],
                     "pdf_likely_primary": cls["likely_primary"], "pdf_has_at_risk": cls["has_at_risk"],
-                    "fusion_usable": cls["fusion_usable"],
+                    "figure_extractable": extractable,
+                    "fusion_usable": usable,
                 })
     # best first: FUSION-USABLE (primary + at-risk table), then has HR, then more timepoints
     candidates.sort(key=lambda c: (bool(c["fusion_usable"]), c["posted_hr"] is not None, c["n_timepoints"]), reverse=True)

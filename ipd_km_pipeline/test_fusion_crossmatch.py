@@ -2,7 +2,13 @@
 the NCT regex and the ctgov KM-curve detector, including the subgroup-table /
 median-table / single-arm false positives that the naive >=3-classes heuristic
 flagged (NCT00363415 was a real subgroup-median false positive)."""
+from pathlib import Path
+
+import pytest
+
 import fusion_crossmatch as X
+
+_CORPUS = Path(__file__).resolve().parent / "corpus_pmc"
 
 
 def _study(measures):
@@ -68,6 +74,32 @@ def test_needs_three_timepoints_and_results():
 def test_is_timepoint_helper():
     assert X._is_timepoint("Month 6") and X._is_timepoint("24 months") and X._is_timepoint("12")
     assert not X._is_timepoint("Sex: Male") and not X._is_timepoint("Race: Caucasian")
+
+
+def test_figure_extractable_bad_path():
+    """A non-existent PDF is not extractable (deps present -> False; absent -> None)."""
+    assert X.figure_extractable(_CORPUS / "does_not_exist.pdf") in (False, None)
+
+
+@pytest.mark.skipif(not (_CORPUS / "PMC9662922.pdf").exists(),
+                    reason="corpus PDF absent (gitignored)")
+def test_figure_extractable_true_for_real_km_figure():
+    # PMC9662922 (PALOMA-3) has a clean extractable 2-arm KM figure
+    res = X.figure_extractable(_CORPUS / "PMC9662922.pdf")
+    if res is None:
+        pytest.skip("figure/raster deps unavailable")
+    assert res is True
+
+
+@pytest.mark.skipif(not (_CORPUS / "PMC7935816.pdf").exists(),
+                    reason="corpus PDF absent (gitignored)")
+def test_figure_extractable_false_for_no_figure_paper():
+    # PMC7935816 cites FLAURA (strong PFS HR 0.46) but the locator finds NO figure
+    # -- the has_at_risk text regex over-counts it; extractability must reject it.
+    res = X.figure_extractable(_CORPUS / "PMC7935816.pdf")
+    if res is None:
+        pytest.skip("figure/raster deps unavailable")
+    assert res is False
 
 
 def test_hr_separation():
