@@ -284,24 +284,28 @@ def acquire(query: str, n: int, out_dir: Path, sleep: float = 0.34,
                 if pdf is None:
                     skipped["no_pdf"] += 1
                     manifest["no_pdf"].append(pmcid)  # interstitial = permanent
-                    continue
-                manifest["pdfs"].append({"pmcid": pmcid, "pdf": pdf.name})
-                got += 1
-                since_flush += 1
-                print(f"  [{got}/{n}] PMC{pmcid}  {pdf.stat().st_size // 1024} KB")
-                if since_flush >= flush_every:
-                    manifest_path.write_text(json.dumps(manifest, indent=2))
-                    since_flush = 0
+                else:
+                    manifest["pdfs"].append({"pmcid": pmcid, "pdf": pdf.name})
+                    got += 1
+                    print(f"  [{got}/{n}] PMC{pmcid}  {pdf.stat().st_size // 1024} KB")
+                since_flush += 1                       # success OR blacklist mutated
             except urllib.error.HTTPError as exc:
                 # 404/410/403/500 = no renderable PDF -> blacklist so future runs
                 # skip it instead of re-failing the same dead id every restart.
                 skipped["no_pdf"] += 1
                 manifest["no_pdf"].append(pmcid)
+                since_flush += 1
             except Exception as exc:
                 # transient (timeout / DNS getaddrinfo) -- do NOT blacklist; a
                 # later run retries it.
                 skipped["error"] += 1
                 print(f"  skip PMC{pmcid}: {type(exc).__name__}: {exc}")
+            # Flush every ``flush_every`` manifest mutations (downloads AND
+            # blacklist entries) so a failure-heavy run killed before its next
+            # success still persists the dead-id blacklist it accumulated.
+            if since_flush >= flush_every:
+                manifest_path.write_text(json.dumps(manifest, indent=2))
+                since_flush = 0
     manifest_path.write_text(json.dumps(manifest, indent=2))
     print(f"\nacquired {got} new PDFs (total {len(manifest['pdfs'])}); skipped {skipped}")
     return manifest
