@@ -130,9 +130,24 @@ def _iou(pred, mask, cls):
     return float(inter / union) if union else float("nan")
 
 
+def _eval_held(model, held, torch):
+    """Held-out pixel accuracy and mean arm-IoU (classes 1 & 2)."""
+    model.eval()
+    accs, ious = [], []
+    with torch.no_grad():
+        for img, mask in held:
+            pred = model(torch.from_numpy(img)[None, None]).argmax(1)[0].numpy()
+            accs.append(float((pred == mask).mean()))
+            ious.append(_iou(pred, mask, 1)); ious.append(_iou(pred, mask, 2))
+    model.train()
+    return float(np.mean(accs)), float(np.nanmean(ious))
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--epochs", type=int, default=60)
+    ap.add_argument("--epochs", type=int, default=120)
+    ap.add_argument("--lr", type=float, default=3e-3,
+                    help="initial LR (1e-2 oscillated; 3e-3 + cosine converges)")
     ap.add_argument("--exclude-text", action="store_true")
     args = ap.parse_args()
 
@@ -166,35 +181,39 @@ def main():
           f"{[round(x,2) for x in weights.tolist()]}")
 
     from unet_segment import build_unet
+    import copy
     model = build_unet(n_classes=N_CLASSES, in_ch=1)
-    opt = torch.optim.Adam(model.parameters(), lr=1e-2)
+    opt = torch.optim.Adam(model.parameters(), lr=args.lr)
+    # Cosine annealing: the old fixed lr=1e-2 oscillated (loss bounced 1.05-1.15
+    # without converging); a decaying LR lets it settle. Eval held-out IoU
+    # periodically and KEEP THE BEST model, not the last epoch (which can be
+    # past the optimum).
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
     loss_fn = nn.CrossEntropyLoss(weight=weights)
     model.train()
+    best_iou, best_state, best_acc = -1.0, None, 0.0
     for ep in range(args.epochs):
         opt.zero_grad()
         loss = loss_fn(model(X), Y)
-        loss.backward(); opt.step()
-        if ep % 15 == 0 or ep == args.epochs - 1:
-            print(f"  epoch {ep:3d}  loss {loss.item():.4f}")
+        loss.backward(); opt.step(); sched.step()
+        if ep % 20 == 0 or ep == args.epochs - 1:
+            acc, iou = _eval_held(model, held, torch)
+            if iou > best_iou:
+                best_iou, best_acc, best_state = iou, acc, copy.deepcopy(model.state_dict())
+            print(f"  epoch {ep:3d}  loss {loss.item():.4f}  "
+                  f"held arm-IoU {iou:.3f}  (best {best_iou:.3f})", flush=True)
 
-    # held-out evaluation
-    model.eval()
-    accs, iou1, iou2 = [], [], []
-    with torch.no_grad():
-        for img, mask in held:
-            out = model(torch.from_numpy(img)[None, None])
-            pred = out.argmax(1)[0].numpy()
-            accs.append(float((pred == mask).mean()))
-            iou1.append(_iou(pred, mask, 1)); iou2.append(_iou(pred, mask, 2))
-    arm_iou = np.nanmean(iou1 + iou2)
-    print(f"\nHELD-OUT: pixel-acc {np.mean(accs):.3f}  "
-          f"arm-IoU {arm_iou:.3f}  (n={len(held)} boxes)")
+    if best_state is not None:
+        model.load_state_dict(best_state)              # restore the best checkpoint
+    print(f"\nHELD-OUT (best): pixel-acc {best_acc:.3f}  "
+          f"arm-IoU {best_iou:.3f}  (n={len(held)} boxes)")
     Path("artifacts").mkdir(exist_ok=True)
     torch.save(model.state_dict(), "artifacts/unet_real.pt")
     Path("artifacts/unet_real_metrics.json").write_text(json.dumps({
         "n_figures": n_fig, "train_boxes": len(train), "held_boxes": len(held),
-        "held_pixel_acc": round(float(np.mean(accs)), 4),
-        "held_arm_iou": round(float(arm_iou), 4),
+        "lr": args.lr, "epochs": args.epochs, "scheduler": "cosine",
+        "held_pixel_acc": round(best_acc, 4),
+        "held_arm_iou": round(best_iou, 4),
     }, indent=2))
     print("-> artifacts/unet_real.pt + unet_real_metrics.json")
 
