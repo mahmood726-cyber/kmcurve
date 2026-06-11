@@ -31,26 +31,42 @@ DEFAULT_QUERY = '"kaplan-meier"[Body] AND randomized AND open access[filter]'
 _UA = "Mozilla/5.0 (KMcurve-corpus research)"
 
 
-def _get(url: str, timeout: int = 45, retries: int = 4) -> bytes:
-    """Fetch with bounded exponential backoff. Local DNS resolution fails in
-    bursts under rapid-fire requests (getaddrinfo failed / Errno 11001), then
-    recovers; retrying turns those transient bursts into successes instead of
-    discarding a candidate PDF. A genuine 404/410 is NOT retried (it will never
-    succeed) -- only connection/DNS/5xx-class errors are."""
+def _get(url: str, timeout: int = 30, retries: int = 4, max_seconds: float = 90.0) -> bytes:
+    """Fetch with bounded exponential backoff AND a wall-clock deadline.
+
+    Local DNS resolution fails in bursts under rapid-fire requests (getaddrinfo
+    failed / Errno 11001) then recovers; retrying turns those transient bursts
+    into successes. A genuine 404/410/403 is NOT retried; only connection/DNS/
+    5xx-class errors are.
+
+    The wall-clock deadline (chunked read with a per-fetch ``max_seconds`` budget)
+    is essential: urllib's ``timeout`` is PER-SOCKET-OPERATION, so a server that
+    trickles bytes slowly can stall a single fetch far beyond ``timeout`` without
+    ever tripping it -- observed hanging the whole acquisition on one slow PDF.
+    The budget bounds any single fetch and lets the retry/skip logic move on."""
     import urllib.error
 
     req = urllib.request.Request(url, headers={"User-Agent": _UA})
     for attempt in range(retries):
         try:
+            start = time.monotonic()
             with urllib.request.urlopen(req, timeout=timeout) as r:
-                return r.read()
+                chunks = []
+                while True:
+                    if time.monotonic() - start > max_seconds:
+                        raise TimeoutError(f"fetch exceeded {max_seconds}s wall-clock")
+                    chunk = r.read(65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                return b"".join(chunks)
         except urllib.error.HTTPError as exc:
             # 404/410/403 are permanent for this URL; 429/5xx are worth retrying.
             if exc.code in (404, 410, 403) or attempt == retries - 1:
                 raise
             time.sleep(2 ** attempt)
         except Exception:
-            # URLError (DNS/conn reset), timeout, etc. -- transient, back off.
+            # URLError (DNS/conn reset), socket/wall-clock timeout -- transient.
             if attempt == retries - 1:
                 raise
             time.sleep(2 ** attempt)
