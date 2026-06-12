@@ -75,16 +75,25 @@ def _extract_one(pdf, exclude_text: bool):
         sc = DPI / 72.0
         x0, t, x1, b = c.bbox
         g = g[int(t * sc):int(b * sc), int(x0 * sc):int(x1 * sc)]
-    boxes = detect_plot_boxes(g) or ([detect_plot_box(g)] if detect_plot_box(g) else [])
-    tboxes = _rapidocr_text_boxes(g) if exclude_text else None
-    samples = []
-    for box in boxes:
-        if box is None or min(box.x1 - box.x0, box.y1 - box.y0) < 40:
-            continue
-        # thickness=3 so 1px curves survive the downsize to 128x160
-        img, mask = WL.figure_sample(g, box, text_boxes=tboxes, n_arms=2, thickness=3)
-        if 1 in mask and 2 in mask:                 # a usable 2-arm mask
-            samples.append(WL.resize_sample(img, mask, 128, 160))
+    # A degenerate caption bbox can crop g to an empty/sliver array; detect_plot_boxes
+    # -> cv2.morphologyEx then asserts on the empty src and (previously) aborted the
+    # WHOLE corpus build. Guard the empty crop AND wrap the detect/sample chain so any
+    # single poison PDF becomes a recorded miss, never a crash.
+    if g is None or g.size == 0 or min(g.shape[:2]) < 40:
+        return None
+    try:
+        boxes = detect_plot_boxes(g) or ([detect_plot_box(g)] if detect_plot_box(g) else [])
+        tboxes = _rapidocr_text_boxes(g) if exclude_text else None
+        samples = []
+        for box in boxes:
+            if box is None or min(box.x1 - box.x0, box.y1 - box.y0) < 40:
+                continue
+            # thickness=3 so 1px curves survive the downsize to 128x160
+            img, mask = WL.figure_sample(g, box, text_boxes=tboxes, n_arms=2, thickness=3)
+            if 1 in mask and 2 in mask:                 # a usable 2-arm mask
+                samples.append(WL.resize_sample(img, mask, 128, 160))
+    except Exception:
+        return None
     return samples or None
 
 

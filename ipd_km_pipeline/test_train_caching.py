@@ -84,6 +84,33 @@ def test_no_grow_skips_extraction(tmp_path, monkeypatch):
     assert sorted(s for s, _ in figs) == ["a"]           # only the already-cached figure
 
 
+class _FakeCand:
+    def __init__(self, bbox, page_index=0):
+        self.bbox = bbox
+        self.page_index = page_index
+
+
+def test_extract_one_empty_crop_returns_none(monkeypatch):
+    """A degenerate caption bbox cropping to an empty image must yield a miss
+    (None), not crash the whole corpus build (regression: cv2.morphologyEx on an
+    empty src aborted the build at PDF ~2509/2709)."""
+    monkeypatch.setattr(T.FL, "locate_km_figures",
+                        lambda *a, **k: [_FakeCand(bbox=(10, 10, 10, 10))])
+    monkeypatch.setattr(T, "render_page", lambda *a, **k: np.full((100, 100), 255, np.uint8))
+    assert T._extract_one(Path("x.pdf"), exclude_text=False) is None
+
+
+def test_extract_one_swallows_detect_exception(monkeypatch):
+    """Any exception in the detect/sample chain becomes a miss, not a crash."""
+    monkeypatch.setattr(T.FL, "locate_km_figures",
+                        lambda *a, **k: [_FakeCand(bbox=None)])
+    monkeypatch.setattr(T, "render_page", lambda *a, **k: np.full((100, 100), 255, np.uint8))
+    def _boom(*a, **k):
+        raise RuntimeError("cv2 morphologyEx assertion")
+    monkeypatch.setattr(T, "detect_plot_boxes", _boom)
+    assert T._extract_one(Path("x.pdf"), exclude_text=False) is None
+
+
 def test_present_filter_drops_removed_pdf(tmp_path, monkeypatch):
     """A figure cached from a PDF no longer in the corpus is not returned."""
     cache_file = tmp_path / "ws.pkl"
