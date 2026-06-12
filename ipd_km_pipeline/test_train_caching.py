@@ -64,6 +64,26 @@ def test_cache_adds_only_new_pdf(tmp_path, monkeypatch):
     assert sorted(s for s, _ in figs) == ["a", "b"]
 
 
+def test_no_grow_skips_extraction(tmp_path, monkeypatch):
+    """grow=False returns the cached present figures WITHOUT extracting new PDFs."""
+    cache_file = tmp_path / "ws.pkl"
+    monkeypatch.setattr(T, "_cache_path", lambda exclude_text: cache_file)
+    pdfs = [tmp_path / "a.pdf"]
+    pdfs[0].write_bytes(b"%PDF-1.4")
+    monkeypatch.setattr(T, "_iter_pdfs", lambda: list(pdfs))
+    monkeypatch.setattr(T, "_extract_one", lambda pdf, et: _fake_sample())
+    T.build_samples(exclude_text=False)                  # seed cache with 'a'
+
+    # add a new PDF, then build with grow=False -> the new one is NOT extracted
+    new = tmp_path / "b.pdf"; new.write_bytes(b"%PDF-1.4"); pdfs.append(new)
+    calls = []
+    monkeypatch.setattr(T, "_extract_one",
+                        lambda pdf, et: calls.append(pdf.stem) or _fake_sample())
+    figs = T.build_samples(exclude_text=False, grow=False)
+    assert calls == []                                   # no extraction at all
+    assert sorted(s for s, _ in figs) == ["a"]           # only the already-cached figure
+
+
 def test_present_filter_drops_removed_pdf(tmp_path, monkeypatch):
     """A figure cached from a PDF no longer in the corpus is not returned."""
     cache_file = tmp_path / "ws.pkl"
