@@ -11,15 +11,20 @@ labels are WEAK (heuristic-derived), so the metric measures whether the learned
 segmenter reproduces the CV extraction on held-out figures end-to-end -- not a
 production model (that needs hand-labelled masks). Requires torch.
 
-Training-axis results (held-out arm-IoU on the 295-figure cache, same split):
-  - full-batch GD, lr 1e-2 / 60 ep ............... 0.050
-  - full-batch GD, lr 3e-3 / cosine / 120 ep ..... 0.153
-  - mini-batch SGD (bs 32) + augment / 150 ep .... 0.159  (pixel-acc 0.758 -> 0.802)
-The mini-batch + augmentation gain is real but MODEST, and the IoU plateaus by
-~epoch 40 (no longer climbing) -- the training axis is now largely exhausted. The
-binding constraints from here are DATA (295 figures) and WEAK-LABEL quality (a
-heuristic-distilled model cannot exceed the heuristic it learns from); the lever is
-more corpus + hand-labelled masks, not more training tricks.
+Held-out arm-IoU progression (mean over the two arm classes):
+  295 figs  full-batch GD, lr 1e-2 / 60 ep ............ 0.050
+  295 figs  full-batch GD, lr 3e-3 / cosine / 120 ep .. 0.153
+  295 figs  mini-batch SGD (bs 32) + augment / 150 ep . 0.159  (pixel-acc 0.802)
+  649 figs  mini-batch SGD (bs 32) + augment / 80 ep .. 0.190  (pixel-acc 0.838)
+The training tweaks (full-batch -> mini-batch + augment) added +0.006; DOUBLING the
+corpus (295 -> 649 figures, by extracting the newly-acquired PDFs) added +0.031 --
+5x more. This CONFIRMS the plateau analysis: on this weak-label problem the binding
+constraint is DATA volume, not the optimiser. (The 295-vs-649 rows are different
+corpora -> different held-out splits, so it measures more-data on a fresh held set,
+not a same-split delta.) Within a fixed corpus the IoU still plateaus by ~epoch 40,
+so the next gains come from (a) MORE corpus (acquire_corpus.py; the extractor is now
+resumable past poison PDFs) and (b) HAND-LABELLED masks -- a heuristic-distilled
+model cannot exceed the heuristic it learns from.
 
 Usage: python train_on_figures.py --batch-size 32 --augment --eval-every 10   # best
        python train_on_figures.py --no-grow ...   # train on the current cache only
@@ -170,6 +175,16 @@ def _augment_batch(xb, yb, torch, gen):
     return xb.clamp_(0.0, 1.0), yb
 
 
+def _stack_batch(train, idx, torch):
+    """Build one (image, mask) batch tensor from a list of (img, mask) numpy
+    samples by index -- on demand, so the WHOLE training set is never stacked into
+    one big tensor (that ~500MB stack OOM-killed the run once the corpus doubled to
+    649 figures / 1032 boxes). xb: (B,1,H,W) float; yb: (B,H,W) long."""
+    xb = torch.stack([torch.from_numpy(train[j][0])[None] for j in idx])
+    yb = torch.stack([torch.from_numpy(train[j][1]) for j in idx])
+    return xb, yb
+
+
 def _iou(pred, mask, cls):
     p, m = (pred == cls), (mask == cls)
     inter = np.logical_and(p, m).sum()
@@ -232,10 +247,12 @@ def main():
     print(f"train: {len(train)} boxes from {len(train_figs)} figs | "
           f"held-out: {len(held)} boxes from {len(hold_figs)} figs")
 
-    X = torch.stack([torch.from_numpy(i)[None] for i, _ in train])   # (N,1,H,W)
-    Y = torch.stack([torch.from_numpy(m) for _, m in train])         # (N,H,W)
-    # inverse-frequency class weights (thin curves -> bg dominates)
-    counts = np.bincount(Y.numpy().ravel(), minlength=N_CLASSES).astype(float)
+    # inverse-frequency class weights (thin curves -> bg dominates), computed by a
+    # streaming pass over the masks -- no full-tensor stack (memory scales with the
+    # grown corpus; batches are built on demand via _stack_batch).
+    counts = np.zeros(N_CLASSES, float)
+    for _, m in train:
+        counts += np.bincount(m.ravel(), minlength=N_CLASSES)
     w = counts.sum() / (N_CLASSES * np.maximum(counts, 1))
     weights = torch.tensor(np.clip(w, 0.5, 50.0), dtype=torch.float32)
     print(f"class pixel counts {counts.astype(int).tolist()} -> weights "
@@ -254,26 +271,26 @@ def main():
     model.train()
     bs = args.batch_size if args.batch_size and args.batch_size < len(train) else 0
     gen = torch.Generator().manual_seed(0)             # deterministic shuffle/augment
-    n = X.shape[0]
+    n = len(train)
     print(f"optimiser: {'full-batch GD' if bs == 0 else f'mini-batch SGD (bs={bs})'}"
           f"{' + augment' if args.augment else ''}, {args.epochs} epochs")
     best_iou, best_state, best_acc = -1.0, None, 0.0
     for ep in range(args.epochs):
         if bs == 0:                                    # full-batch (legacy path)
             opt.zero_grad()
-            xb, yb = (X, Y)
+            xb, yb = _stack_batch(train, range(n), torch)
             if args.augment:
-                xb, yb = _augment_batch(xb.clone(), yb.clone(), torch, gen)
+                xb, yb = _augment_batch(xb, yb, torch, gen)
             loss = loss_fn(model(xb), yb)
             loss.backward(); opt.step()
         else:                                          # mini-batch SGD
             perm = torch.randperm(n, generator=gen)
             last = 0.0
             for s in range(0, n, bs):
-                idx = perm[s:s + bs]
-                xb, yb = X[idx], Y[idx]
+                idx = perm[s:s + bs].tolist()
+                xb, yb = _stack_batch(train, idx, torch)
                 if args.augment:
-                    xb, yb = _augment_batch(xb.clone(), yb.clone(), torch, gen)
+                    xb, yb = _augment_batch(xb, yb, torch, gen)
                 opt.zero_grad()
                 loss = loss_fn(model(xb), yb)
                 loss.backward(); opt.step()
