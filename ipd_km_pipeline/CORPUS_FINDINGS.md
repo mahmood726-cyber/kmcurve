@@ -890,3 +890,33 @@ unverified. The honest, defensible strong-separation validations remain the **re
 demonstrations (RADIANT-4 HR 0.48 in `fusion_real_trial.py`; the 42-dataset `realipd_benchmark.py --fusion`
 median fold 1.05). PALOMA-3 stays the only *figure*-end-to-end pair. +6 tests
 (`test_fusion_abstract_lever.py`). Reproduce: `python fusion_abstract_lever.py`.
+
+## 2700-PDF re-scan: a strong-pair "crack" in the OA wall — but it's a false positive (pooled-analysis gate added) — 2026-06-12
+
+Re-ran the cross-match on the corpus grown to **2700 PDFs** (from 2121) to test whether more open-access
+PDFs surface a figure-extractable strongly-separated pair beyond PALOMA-3. The raw scan looked like a
+breakthrough: `n_fusion_usable` **1 → 3**, with a new `best_validation_target` of **PMC9103038 ↔ NCT01721772
+(PFS HR 0.44, |log HR| 0.82, 9 timepoints)** — exactly the strong-separation pair the project had been
+hunting (and a second, PMC9103038 ↔ NCT01844505, OS HR 0.63).
+
+**Both new pairs are FALSE POSITIVES.** PMC9103038 is Homicsko et al., *"Proton Pump Inhibitor Use and
+Efficacy of Nivolumab and Ipilimumab in Advanced Melanoma"* (Cancers 2022) — a **post-hoc, retrospective
+POOLED analysis of three CheckMate trials** (NCT01721772, NCT01844505, NCT01927419). Its KM figures are
+PPI-user-vs-nonuser subgroups, **not** the registered nivolumab-vs-dacarbazine arms, so the ctgov-posted PFS
+HR 0.44 does not correspond to anything in its figure. This is the same **necessary-but-not-sufficient**
+trap as APHINITY: `figure_extractable` confirms *a* plot box detects, not that it is the *trial's primary*
+2-arm curve at the registered cohort.
+
+**Gate fix (`classify_pdf` → `_classify_text`, +2 tests).** A new `_SECONDARY_RE` (pooled analysis / post
+hoc / retrospective analysis / exploratory analysis / real-world) marks a PDF `secondary_pooled` when such a
+signal **co-occurs with ≥2 distinct trial NCTs** — a multi-trial re-analysis is no single trial's primary.
+The ≥2-NCT condition is essential: the genuine PALOMA-3 primary (PMC9662922) also says "exploratory/pooled
+analysis" in its discussion but cites only ONE trial NCT, so it is correctly KEPT. After the gate, on 2700
+PDFs: **`n_fusion_usable` 3 → 1, `best_validation_target` back to PMC9662922 / NCT01942135 (OS HR 0.814).**
+
+**Conclusion (unchanged, now stress-tested at 2700 PDFs): the open-access figure wall holds.** Doubling the
+corpus did not produce a second genuine figure-end-to-end pair; the one apparent crack was a pooled
+subgroup re-analysis. PALOMA-3 / PMC9662922 remains the single validatable figure pair. The discovery
+machinery is now hardened against multi-trial secondary analyses, so future re-scans fail closed on them
+rather than mislabelling them validation-grade. Reproduce: `python fusion_crossmatch.py --corpus corpus_pmc
+--out fusion_candidates.json`.

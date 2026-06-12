@@ -94,13 +94,26 @@ def ncts_in_pdf(pdf: Path) -> List[str]:
 
 _NMA_RE = re.compile(r"network meta|meta-analysis|systematic review|\bSUCRA\b", re.IGNORECASE)
 _ATRISK_RE = re.compile(r"(?:no\.?|number|patients?|subjects?|n)\s*at\s*risk|\bat\s*risk\b", re.IGNORECASE)
+# Secondary / post-hoc / pooled-analysis signals: a paper whose KM figures are a
+# subgroup or pooled re-analysis, NOT the registered trial's primary 2-arm curve.
+_SECONDARY_RE = re.compile(r"pooled analysis|post[- ]?hoc|retrospective (?:analysis|cohort|study)"
+                           r"|exploratory analysis|real-world", re.IGNORECASE)
 
 
 def classify_pdf(pdf: Path) -> dict:
-    """Distinguish a trial's PRIMARY publication (2-arm KM figure + at-risk table) from a review/NMA that
-    merely CITES the NCT. The cross-match's NCT-citation test cannot tell them apart -- so a candidate is
-    only fusion-USABLE if its PDF is a likely-primary (few cited NCTs, not an NMA) AND contains an at-risk
-    table. Without this, an NMA citing 17 trials looks like 17 fusion pairs but has none of their figures."""
+    """Distinguish a trial's PRIMARY publication (2-arm KM figure + at-risk table) from a review/NMA/pooled
+    re-analysis that merely CITES the NCT. The cross-match's NCT-citation test cannot tell them apart -- so a
+    candidate is only fusion-USABLE if its PDF is a likely-primary (few cited NCTs, not an NMA, not a
+    multi-trial secondary analysis) AND contains an at-risk table. Without this, an NMA citing 17 trials
+    looks like 17 fusion pairs but has none of their figures.
+
+    The multi-trial-secondary gate was added after the 2700-PDF re-scan surfaced PMC9103038 (Homicsko et al.,
+    a post-hoc PPI-subgroup POOLED analysis of 3 CheckMate trials) as fusion-usable for NCT01721772 (PFS HR
+    0.44) and NCT01844505 -- its KM figures are PPI-user-vs-nonuser, NOT the registered nivolumab arms, so
+    the posted HR does not correspond to its figure (the same necessary-but-not-sufficient trap as APHINITY).
+    A genuine single-trial primary like PALOMA-3 (PMC9662922) also mentions 'pooled/exploratory analysis' in
+    its discussion but cites only ONE trial NCT -- so we exclude only when a secondary signal co-occurs with
+    >=2 distinct trial NCTs."""
     found, txt = set(), ""
     try:
         import fitz
@@ -110,11 +123,21 @@ def classify_pdf(pdf: Path) -> dict:
                 txt += t
                 found.update(_NCT.findall(t))
     except Exception:
-        return {"n_ncts": None, "nma_signals": None, "has_at_risk": None, "likely_primary": None, "fusion_usable": None}
+        return {"n_ncts": None, "nma_signals": None, "has_at_risk": None,
+                "secondary_pooled": None, "likely_primary": None, "fusion_usable": None}
+    return _classify_text(txt, len(found))
+
+
+def _classify_text(txt: str, n_ncts: int) -> dict:
+    """Pure text-side classification (testable without a real PDF). `n_ncts` is the
+    number of DISTINCT trial NCTs cited in the PDF."""
     nma = len(_NMA_RE.findall(txt))
     at_risk = bool(_ATRISK_RE.search(txt))
-    primary = len(found) <= 3 and nma < 3
-    return {"n_ncts": len(found), "nma_signals": nma, "has_at_risk": at_risk,
+    # a pooled/post-hoc analysis spanning MULTIPLE trials is not any one trial's primary
+    secondary_pooled = bool(_SECONDARY_RE.search(txt)) and n_ncts >= 2
+    primary = n_ncts <= 3 and nma < 3 and not secondary_pooled
+    return {"n_ncts": n_ncts, "nma_signals": nma, "has_at_risk": at_risk,
+            "secondary_pooled": secondary_pooled,
             "likely_primary": primary, "fusion_usable": bool(primary and at_risk)}
 
 

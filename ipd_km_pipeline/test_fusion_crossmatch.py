@@ -102,6 +102,33 @@ def test_figure_extractable_false_for_no_figure_paper():
     assert res is False
 
 
+def test_classify_excludes_multitrial_pooled_analysis():
+    """A pooled/post-hoc analysis spanning MULTIPLE trials is NOT any one trial's
+    primary -- regression for PMC9103038 (Homicsko, a PPI-subgroup pooled re-analysis
+    of 3 CheckMate trials) being flagged fusion-usable for NCT01721772 (PFS 0.44) on
+    the 2700-PDF re-scan. Its KM figures are PPI-user-vs-nonuser, not the registered
+    arms, so the posted HR does not correspond to the figure."""
+    pooled = ("...survival at risk... this pooled analysis of three trials "
+              "(NCT01721772, NCT01844505, NCT01927419) was a post hoc, retrospective "
+              "analysis of proton pump inhibitor use...")
+    out = X._classify_text(pooled, n_ncts=3)
+    assert out["secondary_pooled"] is True
+    assert out["likely_primary"] is False
+    assert out["fusion_usable"] is False
+
+
+def test_classify_keeps_single_trial_primary_with_pooled_mention():
+    """A genuine single-trial primary (PALOMA-3 / PMC9662922) that mentions a
+    'pooled/exploratory analysis' in its discussion but cites ONE trial NCT must
+    still be a likely-primary -- the secondary gate requires >=2 distinct NCTs."""
+    primary = ("...patients at risk... an exploratory analysis and a planned pooled "
+               "analysis of the subgroup were performed in this trial (NCT01942135)...")
+    out = X._classify_text(primary, n_ncts=1)
+    assert out["secondary_pooled"] is False
+    assert out["likely_primary"] is True
+    assert out["fusion_usable"] is True            # has 'at risk' + likely-primary
+
+
 def test_hr_separation():
     import math
     assert X._hr_separation(None) is None
