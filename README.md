@@ -50,7 +50,7 @@ These smoke tests use repo-local fixtures and skip cleanly when optional CV depe
 
 ## Methods
 
-The maintained extractor (`ipd_km_pipeline/comprehensive_km_extractor.py`) follows the `SurvdigitizeR`-style raster pipeline rather than SVG-vector parsing of the mutool output:
+The maintained raster extractor (`ipd_km_pipeline/raster_km.py`, driven end-to-end by `ipd_km_pipeline/pipeline_end_to_end.py`) follows the `SurvdigitizeR`-style raster pipeline rather than SVG-vector parsing of the mutool output:
 
 1. **PDF → raster.** PyMuPDF (`fitz`) rasterises the chosen page to a high-resolution PNG.
 2. **Axis calibration.** Axis tick text is read first via PDF text extraction (fast when the PDF carries a text layer) and falls back to OCR (`tesseract`) on rasterised tick regions when the layer is absent.
@@ -58,7 +58,7 @@ The maintained extractor (`ipd_km_pipeline/comprehensive_km_extractor.py`) follo
 4. **Numbers-at-risk.** OCR is applied to the at-risk table region and each label is anchored to its X-tick position.
 5. **IPD reconstruction.** Event-time inference uses the Guyot-style algorithm: drops in `S(t)` are mapped to events, and the at-risk table anchors `n_i` so that `(t_i, event_i)` per patient can be emitted.
 
-`probe.py` (run via the Overmind baseline `baseline_probes/probe_kmcurve.py`) computes deterministic structural signals (`n_curve_points`, `n_steps_detected`, `first_step_time`, `first_drop_mag`, `total_drop`, `n_nrisk_times`, `n_events`) against a fixed fixture so the numerical witness can detect regressions in the extractor.
+The Overmind baseline probe (`baseline_probes/probe_kmcurve.py`, maintained on the Overmind side, not shipped in this repo) computes deterministic structural signals (`n_curve_points`, `n_steps_detected`, `first_step_time`, `first_drop_mag`, `total_drop`, `n_nrisk_times`, `n_events`) against a fixed fixture so the numerical witness can detect regressions in the extractor.
 
 ## Limitations
 

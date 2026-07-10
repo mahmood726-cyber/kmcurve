@@ -79,6 +79,14 @@ def extract_axis_calibration(page, page_height_threshold=0.7, x_axis_left_thresh
     x_vals.sort(key=lambda x: x['x'])
     y_vals.sort(key=lambda x: x['y'])
 
+    # Need >=2 DISTINCT tick positions per axis to fit a line; otherwise the
+    # slope denominator is zero. Fail closed with a clear message rather than
+    # raising an opaque ZeroDivisionError from the division below.
+    if x_vals[-1]['x'] == x_vals[0]['x']:
+        raise ValueError("Need >=2 distinct X-axis tick positions to calibrate")
+    if y_vals[-1]['y'] == y_vals[0]['y']:
+        raise ValueError("Need >=2 distinct Y-axis tick positions to calibrate")
+
     # Calculate linear calibration (pixel → value)
     # X-axis: time
     x_m = (x_vals[-1]['value'] - x_vals[0]['value']) / (x_vals[-1]['x'] - x_vals[0]['x'])

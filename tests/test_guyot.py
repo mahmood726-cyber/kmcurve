@@ -33,6 +33,71 @@ def test_km_from_ipd_recovers_known_survival():
     assert es[1] == pytest.approx(0.8, abs=1e-9)
 
 
+def test_no_nar_explicit_total_n_accounts_all_patients():
+    # No at-risk table, but a genuine total_n=300 is supplied (as the raster
+    # path does via at_risk[i][0][1]). The end-of-follow-up tail must censor
+    # ALL remaining patients, not cap at 10 -- otherwise the reconstructed
+    # curve collapses far below the target. Regression for GUYOT-1.
+    t = np.linspace(0, 60, 60)
+    S = np.linspace(1.0, 0.5, 60)
+    tt, ee = guyot.reconstruct_arm(t, S, total_n=300)
+    assert tt.size == 300  # every patient accounted for, no phantom truncation
+    et, es = guyot.km_from_ipd(tt, ee)
+    assert es[-1] == pytest.approx(0.5, abs=0.05)  # lands on the input endpoint
+
+
+def test_default_total_n_tail_stays_capped():
+    # No total_n and no NAR -> total_n is the fabricated default (100). The
+    # unknown-count case must NOT invent a large censored tail; the 10-cap
+    # still applies so the reconstruction stays well under the phantom 100.
+    t = np.linspace(0, 60, 60)
+    S = np.linspace(1.0, 0.5, 60)
+    tt, _ = guyot.reconstruct_arm(t, S)  # explicit_n is False here
+    assert tt.size < 100
+
+
+def test_interpolate_nar_does_not_mutate_caller_array():
+    # Passing a float ndarray of at-risk counts must not be clobbered by the
+    # internal monotone clamp (np.asarray aliased; np.array copies). GUYOT-2.
+    nar_v = np.array([300.0, 320.0, 150.0])  # 320 > 300 triggers the clamp
+    before = nar_v.copy()
+    guyot.reconstruct_ipd_guyot(
+        np.array([0, 6, 12.0]), np.array([1.0, 0.8, 0.6]),
+        n_risk_times=np.array([0, 6, 12.0]), n_risk_values=nar_v, total_n=300,
+    )
+    assert np.array_equal(nar_v, before)
+
+
+def test_empty_curve_returns_empty_records():
+    # An empty digitised curve must return no records rather than IndexError
+    # from the final-censoring tail dereferencing times[-1]. Regression KM-1.
+    assert guyot.reconstruct_ipd_guyot(np.array([]), np.array([]), total_n=100) == []
+    t, e = guyot.reconstruct_arm(np.array([]), np.array([]), total_n=100)
+    assert t.size == 0 and e.size == 0
+
+
+def test_pdf_to_ipd_monotone_follows_ci_flag(monkeypatch):
+    # pdf_to_ipd must request a DECREASING monotone for a survival axis and an
+    # INCREASING one for a cumulative-incidence axis -- hardcoding "increasing"
+    # flattens survival curves to a constant (zero events). Regression KMC-CAL-1.
+    captured = {}
+
+    def spy(pdf_path, page_index, n_arms=2, monotone="auto"):
+        captured["monotone"] = monotone
+        raise RuntimeError("stop after capturing monotone")
+
+    monkeypatch.setattr(vector_km, "extract_km_from_pdf", spy)
+
+    with pytest.raises(RuntimeError):
+        vector_km.pdf_to_ipd("nonexistent.pdf", 0, value_is_cumulative_incidence=False)
+    assert captured["monotone"] == "decreasing"
+
+    captured.clear()
+    with pytest.raises(RuntimeError):
+        vector_km.pdf_to_ipd("nonexistent.pdf", 0, value_is_cumulative_incidence=True)
+    assert captured["monotone"] == "increasing"
+
+
 def test_reconstruct_round_trips_a_known_curve():
     # Known curve: survival drops 1.0 -> 0.6 over 0..12 months, N=500, with NAR.
     times = np.array([0, 3, 6, 9, 12], dtype=float)

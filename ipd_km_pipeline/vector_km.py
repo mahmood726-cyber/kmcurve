@@ -853,10 +853,15 @@ def pdf_to_ipd(
     from guyot import reconstruct_arm  # local import: keeps guyot optional
 
     # extract all panels' cleaned curves once, index by panel position
+    # Monotone direction MUST follow the axis semantics: a cumulative-incidence
+    # axis rises, a survival axis falls. Hardcoding "increasing" runs
+    # maximum.accumulate on a survival curve and flattens it to a constant
+    # (-> surv=1 everywhere -> zero reconstructed events).
+    curve_monotone = "increasing" if value_is_cumulative_incidence else "decreasing"
     km_by_index = {
         pr.panel.index: pr.arms
         for pr in extract_km_from_pdf(
-            pdf_path, page_index, n_arms=n_arms, monotone="increasing"
+            pdf_path, page_index, n_arms=n_arms, monotone=curve_monotone
         )
     }
 

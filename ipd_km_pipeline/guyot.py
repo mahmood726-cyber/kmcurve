@@ -51,8 +51,11 @@ def _interpolate_nar(
     total_n: int,
 ) -> np.ndarray:
     """Interpolate numbers-at-risk onto the curve timepoints (monotone)."""
-    nar_times = np.asarray(nar_times, dtype=float)
-    nar_values = np.asarray(nar_values, dtype=float)
+    # np.array (not np.asarray) so a caller-owned float ndarray is COPIED, not
+    # aliased -- the monotone-clamp loop below writes in place and must never
+    # leak back into the caller's at-risk array (e.g. shared across arms).
+    nar_times = np.array(nar_times, dtype=float)
+    nar_values = np.array(nar_values, dtype=float)
 
     for i in range(1, len(nar_values)):
         if nar_values[i] > nar_values[i - 1]:
@@ -100,6 +103,11 @@ def reconstruct_ipd_guyot(
     times = np.asarray(times, dtype=float)
     survivals = np.asarray(survivals, dtype=float)
 
+    # empty curve -> no records (mirror the QP backend's nt<2 guard); without
+    # this the final-censoring tail dereferences times[-1] and raises IndexError.
+    if times.size == 0:
+        return []
+
     sort_idx = np.argsort(times)
     times = times[sort_idx]
     survivals = survivals[sort_idx]
@@ -108,6 +116,12 @@ def reconstruct_ipd_guyot(
     for i in range(1, len(survivals)):
         if survivals[i] > survivals[i - 1]:
             survivals[i] = survivals[i - 1]
+
+    # Was a genuine total supplied by the caller? Only the fabricated default
+    # (total_n=100 when nothing is known) should have its end-of-follow-up
+    # censoring capped; an explicit count means every remaining at-risk patient
+    # is administratively censored at last follow-up (see tail below).
+    explicit_n = total_n is not None
 
     if total_n is None:
         if n_risk_values is not None and len(n_risk_values) > 0:
@@ -168,7 +182,11 @@ def reconstruct_ipd_guyot(
 
     n_remaining = total_n - len(ipd)
     if n_remaining > 0:
-        final_censored = n_remaining if has_nar else min(n_remaining, 10)
+        # With a real at-risk table OR an explicitly supplied total_n, all
+        # remaining patients are censored at last follow-up. Only cap when
+        # total_n is the fabricated default (nothing known) to avoid inventing
+        # a large phantom censored tail.
+        final_censored = n_remaining if (has_nar or explicit_n) else min(n_remaining, 10)
         for _ in range(final_censored):
             ipd.append(IPDRecord(time=float(times[-1]), event=0, arm=arm))
 
